@@ -1,0 +1,16 @@
+{
+  "name": "@local/dsh-jevharness-preset",
+  "version": "2.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "bench": "node bench/suite.mjs",
+    "report": "node scripts/jev-report.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

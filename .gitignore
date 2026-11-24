@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Scratch / generated artifacts
+.tmp/
+.jev-answer-draft.md
+.jev-answer.html
+jev-residuals-fixes.html
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
