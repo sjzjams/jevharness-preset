@@ -32,8 +32,8 @@ window.__ModuleLoader__.load({
         '.jev-dot{width:7px;height:7px;border-radius:50%;background:#7c5cff;box-shadow:0 0 8px #7c5cff;animation:jevPulse 1.4s ease-in-out infinite}',
         '.jev-sep{opacity:.4}.jev-badge-deny{color:#f85149;font-weight:700}',
         '.jev-pill{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;margin-right:8px;border-radius:13px;border:1px solid rgba(124,92,255,.4);background:rgba(124,92,255,.1);color:#cdbfff;font:600 11px/1 ui-monospace,Consolas,monospace;cursor:pointer}',
-        '.jev-card{margin:8px auto;max-width:640px;max-height:220px;overflow-x:hidden;overflow-y:auto;border:1px solid rgba(124,92,255,.28);border-radius:10px;background:var(--dsw-alias-bg-elevated,#171c23);font-size:12px}',
-        '.jev-card-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:linear-gradient(90deg,rgba(124,92,255,.18),transparent);flex-wrap:wrap}',
+        '.jev-card{margin:8px auto;max-width:640px;max-height:220px;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(124,92,255,.28);border-radius:10px;background:var(--dsw-alias-bg-elevated,#171c23);font-size:12px}',
+        '.jev-card-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:linear-gradient(90deg,rgba(124,92,255,.18),transparent);flex-wrap:wrap;flex:0 0 auto}',
         '.jev-card-title{font-weight:700;color:#cdbfff;font-size:12px}',
         '.jev-card-sub{color:var(--dsw-alias-fg-secondary,#a9b4c0);font-size:11px}',
         '.jev-row{display:flex;align-items:center;gap:6px;padding:4px 12px;font-family:ui-monospace,Consolas,monospace;color:var(--dsw-alias-fg-secondary,#a9b4c0);flex-wrap:wrap}',
@@ -42,13 +42,14 @@ window.__ModuleLoader__.load({
         '.jev-tag-deny{background:rgba(248,81,73,.16);color:#f85149}',
         '.jev-tag-ask{background:rgba(210,153,34,.16);color:#d29922}',
         '.jev-tag-ok{background:rgba(63,185,80,.14);color:#3fb950}',
-        '.jev-kv{display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px 10px}',
+        '.jev-card-body{flex:1 1 auto;min-height:0;overflow-y:auto}',
+        '.jev-kv{display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px 10px;flex:0 0 auto}',
         '.jev-kv span{background:rgba(124,92,255,.1);border:1px solid rgba(124,92,255,.22);border-radius:6px;padding:2px 7px;font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:#cdbfff}',
         '.jev-shield{display:flex;align-items:center;gap:8px;margin:6px 10px;padding:7px 10px;border-radius:8px;border:1px solid rgba(248,81,73,.5);background:linear-gradient(90deg,rgba(248,81,73,.22),rgba(248,81,73,.05));color:#ffb3ad;font-size:12px;font-weight:600;flex-wrap:wrap}',
         '.jev-shield-ic{font-size:15px;filter:drop-shadow(0 0 4px rgba(248,81,73,.6))}',
         '.jev-metric{display:inline-flex;padding:1px 7px;border-radius:6px;background:rgba(63,185,80,.12);color:#7ee787;font-size:10.5px;font-weight:600;font-family:ui-monospace,Consolas,monospace}',
         '.jev-brand{margin-top:2px;padding:5px 10px;border-top:1px dashed rgba(124,92,255,.3);color:#cdbfff;font:600 10.5px/1.4 ui-monospace,Consolas,monospace;opacity:.9}',
-        '.jev-deep-card{max-height:none;overflow:visible}',
+        '.jev-deep-card{display:block;max-height:none;overflow:visible}',
         '.jev-deep-title{padding:9px 12px 2px;font-weight:700;color:#cdbfff}',
         '.jev-deep-head{display:flex;align-items:center;gap:8px;padding-bottom:10px;border-bottom:1px solid rgba(124,92,255,.25);font-weight:700;color:#cdbfff;flex-wrap:wrap}',
         '.jev-deep-sec{margin-top:10px;padding:10px 12px;border-radius:6px;background:rgba(124,92,255,.05)}',
@@ -223,7 +224,8 @@ window.__ModuleLoader__.load({
         h('span', { className: 'jev-metric' }, '省约 ' + fmtTok(savedT) + ' tokens'),
         h('span', { className: 'jev-metric' }, '决策 ' + decs.length + ' · 拦截 ' + gates.length))
       const brand = m === 'showcase' ? h('div', { className: 'jev-brand' }, '⚡ Powered by JEVHarness · 实时六维治理 · ' + decs.length + ' 步决策 / ' + gates.length + ' 次拦截 / 省约 ' + fmtTok(savedT) + ' tokens') : null
-      return h('div', { className: 'jev-card' }, head, shield, rows, metrics, brand)
+      return h('div', { className: 'jev-card' }, head,
+        h('div', { className: 'jev-card-body' }, shield, rows), metrics, brand)
     }
 
     function JevReceiptView(props) {

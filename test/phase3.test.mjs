@@ -111,6 +111,14 @@ test('ui: live card renders every decision and gate, scrolling at capped height'
   assert.match(client, /for \(const g of gates\)/)
 })
 
+test('ui: card header and footer stay fixed while only the body scrolls', () => {
+  assert.match(client, /\.jev-card\{[^}]*display:flex;flex-direction:column;overflow:hidden/)
+  assert.match(client, /\.jev-card-head\{[^}]*flex:0 0 auto/)
+  assert.match(client, /\.jev-card-body\{[^}]*flex:1 1 auto;min-height:0;overflow-y:auto/)
+  assert.match(client, /\.jev-kv\{[^}]*flex:0 0 auto/)
+  assert.match(client, /className: 'jev-card-body' \}, shield, rows\), metrics, brand/)
+})
+
 test('ui: deep console shows the real-time decision stream', () => {
   assert.match(client, /\.jev-stream\{max-height:180px;overflow-y:auto/)
   assert.match(client, /const streamSec = h\('div', \{ className: 'jev-deep-sec'/)
