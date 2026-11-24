@@ -892,6 +892,13 @@ export function apply(ctx, config = {}) {
             liveBus.push(sessionId, { kind: 'turn', turn: state.turns, step: state.steps })
           } catch { /* fail-open */ }
         }
+      } else if (type === 'turn/end') {
+        // Turn-end receipt: standard turn/end reaches the client; the log-only
+        // jev/receipt event is a guaranteed fallback on the same path as decisions.
+        if (state.isJev) {
+          try { liveBus.push(sessionId, { kind: 'turn/end', turn: state.turns, step: state.steps }) } catch { /* fail-open */ }
+          try { appendJev(session, 'jev/receipt', { turn: state.turns, step: state.steps }) } catch { /* fail-open */ }
+        }
       }
     } catch {
       /* fail-open: never break the durable event feed */
@@ -1164,6 +1171,32 @@ export function apply(ctx, config = {}) {
           /* estimate is best-effort */
         }
         savedTokens = Math.round(savedTokens)
+        // Phase 3 deep-decision projection: a compact per-chunk visibility ladder
+        // (after this step's scoring) plus the conditional rules actually mounted.
+        // No raw chunk text crosses into the UI side channel.
+        let chunkLadder = []
+        let ruleHits = []
+        try {
+          chunkLadder = chunkStore.listMetadata(sessionId, { limit: 12 }).map((c) => ({
+            id: c.id,
+            kind: c.kind,
+            source: c.source,
+            sensitivity: c.sensitivity,
+            visibility: c.visibility,
+            chars: c.chars,
+            lines: c.lines,
+          }))
+        } catch { /* deep projection is fail-open */ }
+        try {
+          ruleHits = Array.isArray(condResult?.rules)
+            ? condResult.rules.slice(0, 24).map((r) => ({
+                id: r.id,
+                name: r.name,
+                source: r.source,
+                reason: r.reason,
+              }))
+            : []
+        } catch { /* deep projection is fail-open */ }
         try {
           liveBus.markJev(sessionId)
           liveBus.push(sessionId, {
@@ -1187,6 +1220,8 @@ export function apply(ctx, config = {}) {
             cacheFrozen,
             savedTokens,
             ledgerChars,
+            chunkLadder,
+            ruleHits,
           })
         } catch {
           /* live projection is fail-open */
@@ -1213,6 +1248,8 @@ export function apply(ctx, config = {}) {
             cacheFrozen,
             savedTokens,
             ledgerChars,
+            chunkLadder,
+            ruleHits,
           })
         } catch (e) { /* fail-open */ }
       }

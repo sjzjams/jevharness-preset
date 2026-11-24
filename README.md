@@ -1,11 +1,11 @@
-# JEVHarness 自定义预设（v2.1.0）
+# JEVHarness 自定义预设（v2.2.4）
 
 > 把《JEV ENGINEERING FOR CODING AGENTS》（2026 工作笔记）转化为 DeepSeek Harness 可执行插件架构的 Agent 预设。
 > 通过**按会话严格隔离**的显式类型化状态账本，在每步模型生成前批量向 TypeSafe JeV 询问 Table I 六大决策与 per-chunk 可见性，并由确定性代码执行安全闸门、条件规则挂载、子目标去重/读写锁与异步 JSONL 可观测。
 
 - 声明 id：`jevharness`
 - 显示名：`JEVHarness`
-- Bundle：`@local/dsh-jevharness-preset`（`v2.1.0`）
+- Bundle：`@local/dsh-jevharness-preset`（`v2.2.4`）
 - 基础：官方 `ptc` 预设 + 零外部依赖纯 Node 20+ ESM 插件层
 - 依据：《JEV ENGINEERING FOR CODING AGENTS》（Diogo Almeida / TypeSafe 设计笔记综合版）
 
@@ -38,7 +38,7 @@ jevharness-preset/
 │  └─ jev-report.mjs             # 本地观测报表 CLI + 静态 HTML 仪表盘生成器
 ├─ bench/
 │  └─ suite.mjs                  # 4 类标准化离线回归基准套件
-└─ test/                         # 67 项原生 node:test 单元测试与端到端集成测试（含 live-bus）
+└─ test/                         # 80 项原生 node:test 单元测试与端到端集成测试（含 live-bus / phase3 / UI 放置 / 步流与回执 / 决策台文案 / 数据流与规则举例）
 ```
 
 ---
@@ -57,7 +57,7 @@ plugin_manager action=install_bundle target=<绝对路径>\jevharness-preset
 本地开发验证（零外部依赖，Node 20+ 即可运行）：
 
 ```bash
-# 运行全部 67 项单元测试与端到端集成测试
+# 运行全部 80 项单元测试与端到端集成测试
 npm test
 
 # 运行 4 类多场景离线基准
@@ -101,16 +101,25 @@ npm run report
 - **子目标去重与读写锁（§VI）**：`subagent` 派发前通过中英文 Jaccard 相似度拦截重复任务，并按路径执行读-读并发放行、写-写与读写冲突拦截；工具报错/完成事件丢失时释放子目标锁，陈旧 `in_flight` 自动过期，避免自锁。
 - **门控报错不回灌**：`session/event` 的 `tool/result` 分支会跳过 `Error: JEVHarness blocked…` / `Error: JeV permissions=…` 这类门控拒绝结果，不再把它们作为业务 chunk 回喂给 JeV 放大负面偏置；门控事件仍单独写入 JSONL gate 日志。
 
-### 3.5 实时 Web UI 投影（v2.1.0 新增）
+### 3.5 实时 Web UI 投影（v2.1.0 新增，v2.2.0 扩展）
 
-- **零成本旁路**：`jev-harness-loop` 把同一份每步决策（六维行、延迟、缓存冻结、拦截、估算省下 token）写入新增的 `shared/live-bus.mjs` 内存环形缓冲（每会话最多 400 事件、120s 活跃 TTL）；**只走 UI 旁路、不进模型 prompt，KV Cache 前缀完全不受影响**。
-- **RPC 频道**：宿主经 `connection.rpc.handle('jev:harness:live', …)` 暴露 `hello / probe / since / snapshot` 端点；浏览器端 `client.js` 以约 700ms 轮询 `since` 做增量投影，全部 fail-open（形状不符或 RPC 失败时返回 null / 保留上次状态）。
-- **三处增量 UI 槽位**（不侵入宿主既有布局）：
-  - `conversation.session.header.utilities` → 呼吸灯「JEV Live」HUD（步号 / 延迟 / 拦截计数）；
-  - `conversation.input.left` → 「JEV 六维」显示模式 pill；
-  - `conversation.chat.turnTail` → 实时步骤流 + 回合回执卡（六维行、拦截盾牌、KV 复用率与省约 token 估算）。
-- **三种显示模式**：`实时 / 精简 / 演示`，持久化于 `localStorage`，点击 HUD / pill 循环切换。
-- **自注册机制**：`package.json` 新增 `exports["./client"]` 与 `dsh.client`（`platform=web`），`cordis.patch.yml` 末尾新增 `jevharness-ui` 自插入行（同 `dsh-context` 模式）让包根 `index.js` 被实例化、`./client.js` 才能进入浏览器 bundle；`index.js` 仅写 `~/.dsh/jev-decisions/_ui-root.json` 自检标记。宿主侧同时写 `_ui-diag.json`（模块图），浏览器客户端执行后写 `_client-hello.json`，用于「宿主 → 模块图 → 浏览器」三段链路自检。
+- **零成本旁路**：`jev-harness-loop` 把同一份每步决策（六维行、延迟、缓存冻结、拦截、估算省下 token、Chunk 阶梯、规则命中）写入 `shared/live-bus.mjs` 内存环形缓冲（每会话最多 400 事件、120s 活跃 TTL），并向宿主会话追加 log-only 事件 `jev/decision` / `jev/gate`；**只走 UI 旁路、不进模型 prompt，KV Cache 前缀完全不受影响**，全部 fail-open。
+- **跨进程通道**：桌面 Web 下自建 `/api` 与 `connection.rpc` 频道均不可达（405/404，见决策记录 `dbc70c44` / `7a1c00fb`）。正解是宿主 `session.append` 只读日志事件 + 客户端 `ctx.uiConversation.events.register` 注册 Conversation Node：事件随会话流下发、可回放、跨会话持久化。
+- **四处 UI 槽位**（不侵入宿主既有布局）：
+  - `conversation.input.dock` → 「JEV 实时介入」常驻条，贴在对话区最下面（composer 上方），随对话增长始终可见；
+  - `conversation.chat.node` → 仅在 `turn/end` 后渲染「✅ JEV 治理回执」卡（六维行、拦截盾牌、KV 复用率与省约 token 估算），锚点在流尾不再跑到顶部；
+  - `conversation.session.header.utilities` → 呼吸灯「JEV Live」HUD（步号 / 拦截计数），点击打开右侧深度决策台；
+  - `conversation.input.left` → 「JEV 六维」显示模式 pill（点击循环 live / compact / showcase）；
+  - `sidebar.right.pane.tab` → 右侧专属「JEV 决策台」tab（v2.2.0）。
+- **三种显示模式**：`实时 / 精简 / 演示`，持久化于 `localStorage`，由输入药丸循环切换。
+- **自注册机制**：`package.json` 的 `exports["./client"]` 与 `dsh.client`（`platform=web`，`inject` 含 `@deepseek-ai/dsh-client-ui-sidebar-right`）让 `client.js` 进入浏览器 bundle；`cordis.patch.yml` 末尾 `jevharness-ui` 自插入行让包根 `index.js` 被实例化。`index.js` 写 `~/.dsh/jev-decisions/_ui-root.json` 自检标记。
+
+### 3.6 深度决策台（v2.2.0 新增 · H 分期 Phase 3）
+
+- **右侧面板**：按官方两段式契约注册——`ctx.sidebarRightTabs.register({ id: '@local/dsh-jevharness-preset/sidebar', kind: 'jev-harness-decisions', keepMounted: true, guide })` + `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: id }, Body)`；引导页提供「JEV 决策台」入口胶囊，顶栏 HUD 点击直接 `openTab(kind)` 打开。
+- **Chunk 可见性阶梯**：每步把 `chunkStore.listMetadata` 的紧凑投影（id / kind / source / sensitivity / visibility / chars / lines，**不含 chunk 原文**）随 `jev/decision` 下发，面板按 `hide / short_summary / long_summary / full` 四档绘制分段条、计数与逐 chunk 列表。
+- **条件规则命中列表**：同事件携带本步实际挂载的 `FOOTGUNS.md` / `.jev/rules/*.md` 命中（id / name / source / reason），面板列出规则名、来源与命中原因；无命中时显示空态。
+- **零 prompt 成本**：以上字段只进 UI 旁路事件，不进 `system-prompt/assemble`，不破坏冻结的 KV Cache 前缀。
 
 ---
 
@@ -177,6 +186,11 @@ npm run report
 
 | 版本 | 说明 |
 |---|---|
+| `v2.2.4` | 决策台布局按 design-taste 规则改为色阶分区（去细线），并新增命中规则举例（paths/keywords/tools/always 各有中文示例）；按 diagram-design 产出 `jev-data-flow.html`（Data Flow 类型，自定义 JEV 皮肤，self_check 与 geometry 双门通过）并在决策台内嵌同款五段数据流。测试 78 → 80 项全绿。 |
+| `v2.2.3` | 深度决策台改用与实时卡一致的 `jev-card` 视觉体系（卡片头 / 脉动点 / tag / 指标条 / 盾牌 / 品牌水印）；内容改为中文解释：六维决策逐项说明、Chunk 四档的通俗含义、规则命中原因与空态文案。测试 77 → 78 项全绿。 |
+| `v2.2.2` | 实时卡改为逐步流：只渲染最新一步决策与最新拦截，卡片 `max-height:220px` 超限滚动，不再铺满界面；新增 4s 空闲防抖 `settleNow`，无宿主 `turn/end` 时也会在底部切换为「JEV 治理回执」。测试 74 → 77 项全绿。 |
+| `v2.2.1` | UI 放置优化：实时介入卡从对话流顶部锚点改到 `conversation.input.dock` 底部常驻条（`jev-dock-sticky`），live Definition 的 `buildViewNode` 返回 null 不再在顶部渲染；新增独立 `receiptDefinition`，按 `turn/end`（及宿主 fallback `jev/receipt`）在流尾锚定「✅ JEV 治理回执」卡。测试 71 → 74 项全绿。 |
+| `v2.2.0` | H 分期 Phase 3 深度决策台：按官方两段式契约注册右侧 `sidebarRightTabs` 专属「JEV 决策台」tab（引导页入口 + HUD 点击 `openTab`）；`jev/decision` 旁路事件新增 `chunkLadder`（四档可见性阶梯紧凑投影，不含原文）与 `ruleHits`（条件规则命中），面板可视化分段条、逐 chunk 列表与规则命中列表。README §3.5 同步修正为实际的 `session.append` + Conversation Node 通道（非旧 RPC 轮询）。`package.json` 注入 `@deepseek-ai/dsh-client-ui-sidebar-right`，版本升至 2.2.0；新增 `test/phase3.test.mjs`，测试 67 → 71 项全绿。 |
 | `v2.1.0` | 新增实时 Web UI 投影：`shared/live-bus.mjs` 每会话内存环形事件总线 + `connection.rpc` 的 `jev:harness:live` 频道（`hello/probe/since/snapshot`）；`client.js` 渲染「JEV Live」HUD、六维显示模式 pill 与回合回执卡（实时/精简/演示三档，持久化 `localStorage`）。数据只走 UI 旁路、不进 prompt，KV Cache 前缀不受影响，全部 fail-open。`package.json` 增补 `exports["./client"]` 与 `dsh.client`（`platform=web`），`cordis.patch.yml` 末尾新增 `jevharness-ui` 自插入行使 `index.js` / `client.js` 真正进入 bundle；新增 `_ui-diag.json` / `_ui-root.json` / `_client-hello.json` 三段式 UI 自检标记。测试由 59 增至 67 项（新增 `test/live-bus.test.mjs`）。 |
 | `v2.0.1` | 修复 4 处实战缺陷：PTC 仓外写只解析写/删调用的路径实参（并对 `path.join`/模板等动态路径做保守兜底、屏蔽注释与字符串里的伪调用，消除误报）；`session/event` 不再把 `Error: JEVHarness blocked…` / `Error: JeV permissions=…` 等门控报错结果回灌成 chunk 喂给 JeV（切断报错反馈自锁），并对工具报错后的子目标锁即释放、陈旧 in_flight 设 TTL；`run_code` 按脚本正文做读写分级（只读脚本不再被 `permissions=deny` 误拦，`spawnSync/execSync/tools.pwsh` 计为非只读）；修正 `jev-chunks` 摘要 Tip 中 `jev_chunk_read` 的参数名为 `chunk_id`。新增 7 项回归单测（共 59 项）。 |
 | `v2.0.0` | 对齐 `original.pdf` 全面重构：移除全局单例实现严格多会话隔离；抽离 `shared/` 七大零依赖模块；还原 Table I 题型与双峰尾风险升档；补齐 `run_code` 与脚本正文外联闸门；落地 Chunk 账本 + `jev_chunk_read` + `jev_retrieval_pack`、条件规则引擎、子目标去重与读写锁、KV Cache 文本冻结、异步 JSONL 观测、`jev-report` 报表 CLI 与 52 项自动化测试 + 4 场景基准。 |

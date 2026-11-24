@@ -145,6 +145,8 @@ describe('jev-harness-loop — live projection channel end-to-end', () => {
 
       // JEV session: user message + assemble -> decision event projected.
       h.emitSession({ id: 'jev1' }, { type: 'user/message', data: { content: [{ type: 'text', text: 'Inspect src/app.js safely' }] } })
+      // A tool result creates the typed chunk that the phase-3 ladder projects.
+      h.emitSession({ id: 'jev1' }, { type: 'tool/result', data: { name: 'read', path: 'src/app.js', content: [{ type: 'text', text: 'export const ready = true' }] } })
       await h.runAssemble(makeJevBase(tmp), { toolSet: {}, agent: { session: { id: 'jev1' } } })
 
       const snap = await h.captured.handler('since', { sessionId: 'jev1', cursor: -1 })
@@ -154,6 +156,11 @@ describe('jev-harness-loop — live projection channel end-to-end', () => {
       assert.equal(decisions.length, 1)
       assert.equal(decisions[0].lines.routing, 'frontier')
       assert.equal(decisions[0].lines.context_visibility, 'short_summary')
+      // Phase 3 deep-decision payload rides the same event, no raw chunk text.
+      assert.ok(Array.isArray(decisions[0].chunkLadder))
+      assert.ok(decisions[0].chunkLadder.length >= 1)
+      assert.ok(['hide', 'short_summary', 'long_summary', 'full'].includes(decisions[0].chunkLadder[0].visibility))
+      assert.ok(Array.isArray(decisions[0].ruleHits))
 
       // Gate denied -> gate event projected after the cursor.
       await h.runPre({ name: 'read', args: { file_path: '.env' }, agent: { session: { id: 'jev1' } } })
