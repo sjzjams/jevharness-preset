@@ -117,7 +117,49 @@ npm run report
 
 ---
 
-## 6. 变更记录
+## 6. 实测对比：JEVHarness vs PTC
+
+> 2026-11-24 · 同模型 `auto/deepseek-v4.1-flash`（reasoning=high，maxTokens=131072）· 同工作区 · 同一只读任务：glob 全部 `.md`，取最大的 3 个，读前 20 行，出「文件名 / 总行数 / 首个 # 标题」表。
+
+数据来源：会话转写 `~/.dsh/sessions/…/session.v4.jsonl.zstd`（多帧 zstd + JSONL）；JEV 决策 `~/.dsh/jev-decisions/session-f00a72f3-….jsonl`。会话 ID：JEVHarness `session-f00a72f3-b608-4116-b2c3-14b669355e42`，PTC `session-0cdd2e2e-9894-4e32-ab06-de8b441207cb`。
+
+### 6.1 严格对比
+
+| 指标 | PTC 模式 | JEVHarness 模式 |
+|---|---|---|
+| 墙钟耗时（任务到达→turn/end） | 91.0 s | **52.0 s** |
+| turn 时长（turn/start→end） | 93.0 s | 54.3 s |
+| 步数（step/start） | 11 | **6** |
+| 助手消息数 | 11 | 6 |
+| 顶层工具调用 | 10 × run_code | 5 × run_code |
+| 内部工具派发（按名） | glob×2, read×3, skill×2, present×1, mnemon×1 | glob×1, pwsh×3, write×1, skill×1, present×1, mnemon×1 |
+| JeV 决策注入次数 | 0 | **6**（每步 1 次） |
+| 闸门拦截 | 0 | 0 |
+| 答案正确性 | 正确 | 正确 |
+| 答案长度 | 473 字符 | 489 字符 |
+
+### 6.2 token 用量
+
+| 项目 | PTC | JEVHarness |
+|---|---|---|
+| 新鲜输入 input | 15,991 | 18,516 |
+| 输出 output | 4,788 | 3,013 |
+| 缓存读取 cacheRead | 833,920 | 455,040 |
+| 累计处理 total | 854,699 | **476,569** |
+| JeV 决策器额外 | 0 | 13,468（in 11,550 / out 1,918） |
+| 合计（主 + 决策器） | **854,699** | 490,037 |
+
+### 6.3 口径与结论
+
+- 墙钟取「任务消息到达 → turn/end」；若按「会话创建 → 结束」计：JEV 206 s、PTC 109 s——JEV 会话创建后空闲约 154 s 才收到任务，该口径不可比。
+- JEV 决策开销实测：6 次决策合计延迟 4.17 s、13,468 tokens；但整轮总处理量比 PTC 低约 44%（少 5 步 / 5 次顶层调用）。
+- 两会话都受 answer-me-with-html 规则各写入 1 个 HTML 页（JEV→`.tmp/answers/…`，PTC→`~/.answer-me-with-html/…`），源文件均未改动。
+- 闸门：JEV 决策日志中 gate 记录为 0（决策均 `permissions=allow`）；PTC 无闸门机制，同样 0。转写中出现的 `JEVHarness blocked` / `permissions=deny` 字样来自 agent 读取本仓库源码，非真实拦截。
+- 结论：该只读小任务上 JEV 的批量化执行路径更快、更省（总处理量约 -44%），代价是每步一次决策的固定开销；两者最终答案一致且正确。
+
+---
+
+## 7. 变更记录
 
 | 版本 | 说明 |
 |---|---|
