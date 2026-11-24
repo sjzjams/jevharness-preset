@@ -103,12 +103,19 @@ test('ui: Phase 2 rich card design is restored in the bottom dock', () => {
   assert.match(client, /lat \+ 'ms'/)
 })
 
-test('ui: live card is capped and shows only the latest step (step-flow)', () => {
+test('ui: live card renders every decision and gate, scrolling at capped height', () => {
   assert.match(client, /max-height:220px/)
   assert.match(client, /overflow-y:auto/)
-  assert.doesNotMatch(client, /for \(const d of decs\)/)
-  assert.match(client, /Step-flow projection: only the latest decision/)
-  assert.match(client, /if \(last\)/)
+  assert.match(client, /Full step-flow projection: every decision and every gate/)
+  assert.match(client, /for \(const d of decs\)/)
+  assert.match(client, /for \(const g of gates\)/)
+})
+
+test('ui: deep console shows the real-time decision stream', () => {
+  assert.match(client, /\.jev-stream\{max-height:180px;overflow-y:auto/)
+  assert.match(client, /const streamSec = h\('div', \{ className: 'jev-deep-sec'/)
+  assert.match(client, /实时决策数据流/)
+  assert.match(client, /streamSec, ladderSec, flowSec/)
 })
 
 test('ui: governance receipt fires on idle debounce without host turn/end', () => {

@@ -55,6 +55,7 @@ window.__ModuleLoader__.load({
         '.jev-rule-example{margin-top:4px;font-size:10.5px;color:#7ee787}',
         '.jev-flow{margin-top:10px;padding:10px 12px;border-radius:6px;background:rgba(124,92,255,.05)}',
         '.jev-flow svg{width:100%;height:auto;display:block}',
+        '.jev-stream{max-height:180px;overflow-y:auto;margin-top:6px}',
         '.jev-deep-sec h4{margin:0 0 8px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-fg-secondary,#a9b4c0)}',
         '.jev-ladder{display:flex;gap:3px;height:14px;border-radius:6px;overflow:hidden;background:rgba(124,92,255,.08)}',
         '.jev-ladder-seg{display:inline-flex;align-items:center;justify-content:center;min-width:18px;font:700 9px/1 ui-monospace,Consolas,monospace;color:#0d1117}',
@@ -199,24 +200,23 @@ window.__ModuleLoader__.load({
         h('span', { className: 'jev-shield-ic' }, '🛡'),
         h('span', null, 'JEVHarness 已拦截 ' + denyGates.length + ' 次：' + (denyGates[0].ruleId || 'policy')),
         denyGates[0].reason ? h('span', { className: 'jev-card-sub' }, '— ' + String(denyGates[0].reason).slice(0, 90)) : null) : null
-      // Step-flow projection: only the latest decision and the latest gate.
-      // The head count still reports totals, so the card never grows with history.
+      // Full step-flow projection: every decision and every gate, ordered.
+      // The card keeps its 220px cap, so a long stream scrolls inside the card.
       const rows = []
-      if (last) {
-        const L = last.lines || {}
-        rows.push(h('div', { key: 'd' + (last.step || 0), className: 'jev-row' },
-          h('span', { className: 'jev-tag jev-tag-ok' }, '#' + last.step),
+      for (const d of decs) {
+        const L = d.lines || {}
+        rows.push(h('div', { key: 'd' + (d.step || 0) + '-' + rows.length, className: 'jev-row' },
+          h('span', { className: 'jev-tag jev-tag-ok' }, '#' + d.step),
           h('span', null, 'vis='), h('b', null, L.context_visibility || '?'),
           h('span', null, '· cache='), h('b', null, L.cache || '?'),
           h('span', null, '· route='), h('b', null, L.routing || '?'),
           h('span', null, '· tools='), h('b', null, L.tools || '?'),
-          last.cacheFrozen ? h('span', { className: 'jev-tag jev-tag-ok' }, 'KV复用') : null))
+          d.cacheFrozen ? h('span', { className: 'jev-tag jev-tag-ok' }, 'KV复用') : null))
       }
-      const lastGate = gates.length ? gates[gates.length - 1] : null
-      if (lastGate) {
-        rows.push(h('div', { key: 'g' + (lastGate.step || 0), className: 'jev-row' },
-          h('span', { className: 'jev-tag ' + (lastGate.verdict === 'deny' ? 'jev-tag-deny' : 'jev-tag-ask') }, lastGate.verdict),
-          h('b', null, lastGate.toolName || 'tool'), h('span', null, '· ' + (lastGate.ruleId || ''))))
+      for (const g of gates) {
+        rows.push(h('div', { key: 'g' + (g.step || 0) + '-' + rows.length, className: 'jev-row' },
+          h('span', { className: 'jev-tag ' + (g.verdict === 'deny' ? 'jev-tag-deny' : 'jev-tag-ask') }, g.verdict),
+          h('b', null, g.toolName || 'tool'), h('span', null, '· ' + (g.ruleId || ''))))
       }
       const metrics = h('div', { className: 'jev-kv' },
         h('span', { className: 'jev-metric' }, 'KV 复用率 ' + reuseRate + '%'),
@@ -337,6 +337,27 @@ window.__ModuleLoader__.load({
         h('b', null, valueLabel(L[d.key])),
         h('span', { className: 'jev-card-sub' }, '— ' + d.desc)))
 
+      // Real-time decision stream — every decision and gate of this turn,
+      // scrollable inside a capped region so the panel never grows unbounded.
+      const streamRows = []
+      for (const d of decs) {
+        const L = d.lines || {}
+        streamRows.push(h('div', { key: 'sd' + (d.step || 0) + '-' + streamRows.length, className: 'jev-row' },
+          h('span', { className: 'jev-tag jev-tag-ok' }, '#' + d.step),
+          h('b', null, L.context_visibility || '?'), h('span', null, '/'), h('b', null, L.cache || '?'),
+          h('span', null, '/'), h('b', null, L.routing || '?'), h('span', null, '/'), h('b', null, L.tools || '?'),
+          h('span', { className: 'jev-card-sub' }, '· ' + d.step + ' 步')))
+      }
+      for (const g of gates) {
+        streamRows.push(h('div', { key: 'sg' + (g.step || 0) + '-' + streamRows.length, className: 'jev-row' },
+          h('span', { className: 'jev-tag ' + (g.verdict === 'deny' ? 'jev-tag-deny' : 'jev-tag-ask') }, g.verdict),
+          h('b', null, g.toolName || 'tool'), h('span', null, '· ' + (g.ruleId || ''))))
+      }
+      const streamSec = h('div', { className: 'jev-deep-sec' },
+        h('div', { className: 'jev-row' }, h('b', null, '实时决策数据流'),
+          h('span', { className: 'jev-card-sub' }, '— 本回合共 ' + decs.length + ' 步决策 · ' + gates.length + ' 次拦截')),
+        h('div', { className: 'jev-stream' }, streamRows.length ? streamRows : h('div', { className: 'jev-empty' }, '等待本回合的决策事件…')))
+
       const ladderSec = h('div', { className: 'jev-deep-sec' },
         h('div', { className: 'jev-row' }, h('b', null, '上下文处理'),
           h('span', { className: 'jev-card-sub' }, '— 共 ' + chunks.length + ' 份资料，按重要性决定给模型看多少')),
@@ -389,7 +410,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'jev-card jev-deep-card' },
         head, shield,
         h('div', { className: 'jev-deep-title' }, '六步决策 · 逐项说明'), dimRows,
-        ladderSec, flowSec, ruleSec, metrics, brand)
+        streamSec, ladderSec, flowSec, ruleSec, metrics, brand)
     }
 
     // Bottom-of-conversation live projection. conversation.input.dock is a

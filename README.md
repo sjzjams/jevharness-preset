@@ -1,11 +1,11 @@
-# JEVHarness 自定义预设（v2.2.4）
+# JEVHarness 自定义预设（v2.2.5）
 
 > 把《JEV ENGINEERING FOR CODING AGENTS》（2026 工作笔记）转化为 DeepSeek Harness 可执行插件架构的 Agent 预设。
 > 通过**按会话严格隔离**的显式类型化状态账本，在每步模型生成前批量向 TypeSafe JeV 询问 Table I 六大决策与 per-chunk 可见性，并由确定性代码执行安全闸门、条件规则挂载、子目标去重/读写锁与异步 JSONL 可观测。
 
 - 声明 id：`jevharness`
 - 显示名：`JEVHarness`
-- Bundle：`@local/dsh-jevharness-preset`（`v2.2.4`）
+- Bundle：`@local/dsh-jevharness-preset`（`v2.2.5`）
 - 基础：官方 `ptc` 预设 + 零外部依赖纯 Node 20+ ESM 插件层
 - 依据：《JEV ENGINEERING FOR CODING AGENTS》（Diogo Almeida / TypeSafe 设计笔记综合版）
 
@@ -38,7 +38,7 @@ jevharness-preset/
 │  └─ jev-report.mjs             # 本地观测报表 CLI + 静态 HTML 仪表盘生成器
 ├─ bench/
 │  └─ suite.mjs                  # 4 类标准化离线回归基准套件
-└─ test/                         # 80 项原生 node:test 单元测试与端到端集成测试（含 live-bus / phase3 / UI 放置 / 步流与回执 / 决策台文案 / 数据流与规则举例）
+└─ test/                         # 81 项原生 node:test 单元测试与端到端集成测试（含 live-bus / phase3 / UI 放置 / 完整决策步流 / 回执 / 决策台数据流）
 ```
 
 ---
@@ -57,7 +57,7 @@ plugin_manager action=install_bundle target=<绝对路径>\jevharness-preset
 本地开发验证（零外部依赖，Node 20+ 即可运行）：
 
 ```bash
-# 运行全部 80 项单元测试与端到端集成测试
+# 运行全部 81 项单元测试与端到端集成测试
 npm test
 
 # 运行 4 类多场景离线基准
@@ -186,6 +186,7 @@ npm run report
 
 | 版本 | 说明 |
 |---|---|
+| `v2.2.5` | 卡片逐步流改为渲染全部决策与拦截行，沿用 220px 卡片高度，超出内部滚动；深度决策台新增「实时决策数据流」分区，列出本回合全部决策与拦截（180px 内部滚动）。测试 80 → 81 项全绿。 |
 | `v2.2.4` | 决策台布局按 design-taste 规则改为色阶分区（去细线），并新增命中规则举例（paths/keywords/tools/always 各有中文示例）；按 diagram-design 产出 `jev-data-flow.html`（Data Flow 类型，自定义 JEV 皮肤，self_check 与 geometry 双门通过）并在决策台内嵌同款五段数据流。测试 78 → 80 项全绿。 |
 | `v2.2.3` | 深度决策台改用与实时卡一致的 `jev-card` 视觉体系（卡片头 / 脉动点 / tag / 指标条 / 盾牌 / 品牌水印）；内容改为中文解释：六维决策逐项说明、Chunk 四档的通俗含义、规则命中原因与空态文案。测试 77 → 78 项全绿。 |
 | `v2.2.2` | 实时卡改为逐步流：只渲染最新一步决策与最新拦截，卡片 `max-height:220px` 超限滚动，不再铺满界面；新增 4s 空闲防抖 `settleNow`，无宿主 `turn/end` 时也会在底部切换为「JEV 治理回执」。测试 74 → 77 项全绿。 |
