@@ -8,6 +8,9 @@ node_modules/
 jev-residuals-fixes.html
 *.log
 
+# IDE
+.openidea/
+
 # OS junk
 .DS_Store
 Thumbs.db
