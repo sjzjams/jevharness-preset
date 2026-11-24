@@ -208,3 +208,12 @@
         chunkDigestMaxChars: 2400
         writeLegacyMarkdown: false
 
+# Client UI bundle. A bundle's dsh.client is only loaded for packages that are
+# instantiated as a plugin row. This package's patch otherwise only contributes
+# declarations, so nothing would load its root entry and ./client.js would never
+# reach the browser. This self row (same pattern as dsh-context) loads the host
+# half and makes the web app bundle the declared client.
+- insert:
+    - id: jevharness-ui
+      name: '@local/dsh-jevharness-preset'
+

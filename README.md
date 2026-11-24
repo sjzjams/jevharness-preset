@@ -1,11 +1,11 @@
-# JEVHarness 自定义预设（v2.0.0）
+# JEVHarness 自定义预设（v2.1.0）
 
 > 把《JEV ENGINEERING FOR CODING AGENTS》（2026 工作笔记）转化为 DeepSeek Harness 可执行插件架构的 Agent 预设。
 > 通过**按会话严格隔离**的显式类型化状态账本，在每步模型生成前批量向 TypeSafe JeV 询问 Table I 六大决策与 per-chunk 可见性，并由确定性代码执行安全闸门、条件规则挂载、子目标去重/读写锁与异步 JSONL 可观测。
 
 - 声明 id：`jevharness`
 - 显示名：`JEVHarness`
-- Bundle：`@local/dsh-jevharness-preset`（`v2.0.0`）
+- Bundle：`@local/dsh-jevharness-preset`（`v2.1.0`）
 - 基础：官方 `ptc` 预设 + 零外部依赖纯 Node 20+ ESM 插件层
 - 依据：《JEV ENGINEERING FOR CODING AGENTS》（Diogo Almeida / TypeSafe 设计笔记综合版）
 
@@ -15,8 +15,10 @@
 
 ```
 jevharness-preset/
-├─ package.json                  # v2.0.0 bundle 清单与 test / bench / report 脚本
-├─ cordis.patch.yml              # 预设声明、v2 persona 契约与顶层插件配置
+├─ package.json                  # v2.1.0 bundle 清单（含 ./client 导出 + dsh.client）与 test / bench / report 脚本
+├─ cordis.patch.yml              # 预设声明、v2 persona 契约、循环/工具配置与 jevharness-ui 客户端自注册行
+├─ index.js                      # 客户端 bundle 宿主半边（自注册行加载标记 _ui-root.json）
+├─ client.js                     # 浏览器端实时 UI：JEV Live HUD / 显示模式 pill / 回合回执卡
 ├─ shared/
 │  ├─ gateway.mjs                # 共享 Magpie System One 网关客户端与 .env Key mtime 缓存
 │  ├─ answers.mjs                # Table I 题型构造、双峰尾风险解析、置信度分桶与旧格式兼容
@@ -24,18 +26,19 @@ jevharness-preset/
 │  ├─ chunk-store.mjs            # §I/§V/§X 显式类型化 Chunk 账本、可见性阶梯与只读共享检索包
 │  ├─ conditional-rules.mjs      # §VIII 目录 FOOTGUNS.md 与 .jev/rules/*.md 条件加载器（免疫 compaction）
 │  ├─ subgoal-tracker.mjs        # §VI.A 并发路径读写锁 + §VI.B 子目标去重
+│  ├─ live-bus.mjs               # 每会话内存环形事件总线（供 Web UI 实时投影，零 prompt 成本）
 │  └─ telemetry.mjs              # 异步队列 JSONL 日志与离线指标汇总器（兼容旧 .md）
 ├─ jev-decide-tool/
 │  ├─ package.json
 │  └─ index.mjs                  # jev_decide 工具（复用 shared/gateway.mjs）
 ├─ jev-harness-loop/
 │  ├─ package.json
-│  └─ index.mjs                  # 主循环插件：每步决策、闸门、条件规则与 jev_chunk_read / jev_retrieval_pack
+│  └─ index.mjs                  # 主循环插件：每步决策、闸门、条件规则、live 频道与 jev_chunk_read / jev_retrieval_pack
 ├─ scripts/
 │  └─ jev-report.mjs             # 本地观测报表 CLI + 静态 HTML 仪表盘生成器
 ├─ bench/
 │  └─ suite.mjs                  # 4 类标准化离线回归基准套件
-└─ test/                         # 59 项原生 node:test 单元测试与端到端集成测试
+└─ test/                         # 67 项原生 node:test 单元测试与端到端集成测试（含 live-bus）
 ```
 
 ---
@@ -49,12 +52,12 @@ plugin_manager action=remove_bundle target=@local/dsh-jevharness-preset
 plugin_manager action=install_bundle target=<绝对路径>\jevharness-preset
 ```
 
-> 插件代码改动（`.mjs`）会被宿主进程缓存，**更新后需重启 DSH 一次**以加载新版本。
+> 插件代码改动（`.mjs`）会被宿主进程缓存，**更新后需重启 DSH 一次**以加载新版本。涉及 `client.js` / `index.js` 等客户端 bundle 的改动，除重启外还需让 Web 前端产物重新构建（`pnpm run dev:web` 运行时会热更，否则需重建后刷新页面）才会在浏览器生效。
 
 本地开发验证（零外部依赖，Node 20+ 即可运行）：
 
 ```bash
-# 运行全部 59 项单元测试与端到端集成测试
+# 运行全部 67 项单元测试与端到端集成测试
 npm test
 
 # 运行 4 类多场景离线基准
@@ -97,6 +100,17 @@ npm run report
 - **条件绑定指令（§VIII）**：每步自动扫描活跃路径沿途的 `FOOTGUNS.md` / `.jev-footguns.md` 及 `.jev/rules/*.md`（支持 `paths` / `keywords` / `tools` / `always` / `priority`），每步重挂 `jev-conditional-rules`，天然免疫 compaction。
 - **子目标去重与读写锁（§VI）**：`subagent` 派发前通过中英文 Jaccard 相似度拦截重复任务，并按路径执行读-读并发放行、写-写与读写冲突拦截；工具报错/完成事件丢失时释放子目标锁，陈旧 `in_flight` 自动过期，避免自锁。
 - **门控报错不回灌**：`session/event` 的 `tool/result` 分支会跳过 `Error: JEVHarness blocked…` / `Error: JeV permissions=…` 这类门控拒绝结果，不再把它们作为业务 chunk 回喂给 JeV 放大负面偏置；门控事件仍单独写入 JSONL gate 日志。
+
+### 3.5 实时 Web UI 投影（v2.1.0 新增）
+
+- **零成本旁路**：`jev-harness-loop` 把同一份每步决策（六维行、延迟、缓存冻结、拦截、估算省下 token）写入新增的 `shared/live-bus.mjs` 内存环形缓冲（每会话最多 400 事件、120s 活跃 TTL）；**只走 UI 旁路、不进模型 prompt，KV Cache 前缀完全不受影响**。
+- **RPC 频道**：宿主经 `connection.rpc.handle('jev:harness:live', …)` 暴露 `hello / probe / since / snapshot` 端点；浏览器端 `client.js` 以约 700ms 轮询 `since` 做增量投影，全部 fail-open（形状不符或 RPC 失败时返回 null / 保留上次状态）。
+- **三处增量 UI 槽位**（不侵入宿主既有布局）：
+  - `conversation.session.header.utilities` → 呼吸灯「JEV Live」HUD（步号 / 延迟 / 拦截计数）；
+  - `conversation.input.left` → 「JEV 六维」显示模式 pill；
+  - `conversation.chat.turnTail` → 实时步骤流 + 回合回执卡（六维行、拦截盾牌、KV 复用率与省约 token 估算）。
+- **三种显示模式**：`实时 / 精简 / 演示`，持久化于 `localStorage`，点击 HUD / pill 循环切换。
+- **自注册机制**：`package.json` 新增 `exports["./client"]` 与 `dsh.client`（`platform=web`），`cordis.patch.yml` 末尾新增 `jevharness-ui` 自插入行（同 `dsh-context` 模式）让包根 `index.js` 被实例化、`./client.js` 才能进入浏览器 bundle；`index.js` 仅写 `~/.dsh/jev-decisions/_ui-root.json` 自检标记。宿主侧同时写 `_ui-diag.json`（模块图），浏览器客户端执行后写 `_client-hello.json`，用于「宿主 → 模块图 → 浏览器」三段链路自检。
 
 ---
 
@@ -163,6 +177,7 @@ npm run report
 
 | 版本 | 说明 |
 |---|---|
+| `v2.1.0` | 新增实时 Web UI 投影：`shared/live-bus.mjs` 每会话内存环形事件总线 + `connection.rpc` 的 `jev:harness:live` 频道（`hello/probe/since/snapshot`）；`client.js` 渲染「JEV Live」HUD、六维显示模式 pill 与回合回执卡（实时/精简/演示三档，持久化 `localStorage`）。数据只走 UI 旁路、不进 prompt，KV Cache 前缀不受影响，全部 fail-open。`package.json` 增补 `exports["./client"]` 与 `dsh.client`（`platform=web`），`cordis.patch.yml` 末尾新增 `jevharness-ui` 自插入行使 `index.js` / `client.js` 真正进入 bundle；新增 `_ui-diag.json` / `_ui-root.json` / `_client-hello.json` 三段式 UI 自检标记。测试由 59 增至 67 项（新增 `test/live-bus.test.mjs`）。 |
 | `v2.0.1` | 修复 4 处实战缺陷：PTC 仓外写只解析写/删调用的路径实参（并对 `path.join`/模板等动态路径做保守兜底、屏蔽注释与字符串里的伪调用，消除误报）；`session/event` 不再把 `Error: JEVHarness blocked…` / `Error: JeV permissions=…` 等门控报错结果回灌成 chunk 喂给 JeV（切断报错反馈自锁），并对工具报错后的子目标锁即释放、陈旧 in_flight 设 TTL；`run_code` 按脚本正文做读写分级（只读脚本不再被 `permissions=deny` 误拦，`spawnSync/execSync/tools.pwsh` 计为非只读）；修正 `jev-chunks` 摘要 Tip 中 `jev_chunk_read` 的参数名为 `chunk_id`。新增 7 项回归单测（共 59 项）。 |
 | `v2.0.0` | 对齐 `original.pdf` 全面重构：移除全局单例实现严格多会话隔离；抽离 `shared/` 七大零依赖模块；还原 Table I 题型与双峰尾风险升档；补齐 `run_code` 与脚本正文外联闸门；落地 Chunk 账本 + `jev_chunk_read` + `jev_retrieval_pack`、条件规则引擎、子目标去重与读写锁、KV Cache 文本冻结、异步 JSONL 观测、`jev-report` 报表 CLI 与 52 项自动化测试 + 4 场景基准。 |
 | `v1.0.0` | 初版 MVP：基于 `ptc` 预设，提供 `jev_decide` 工具、基础每步六问注入与路径正则闸门。 |

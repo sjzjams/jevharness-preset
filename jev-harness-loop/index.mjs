@@ -22,6 +22,10 @@ import { createChunkStore } from '../shared/chunk-store.mjs'
 import { loadConditionalRules } from '../shared/conditional-rules.mjs'
 import { createSubgoalTracker } from '../shared/subgoal-tracker.mjs'
 import { createTelemetryLogger } from '../shared/telemetry.mjs'
+import { createLiveBus } from '../shared/live-bus.mjs'
+import { writeFileSync, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 export const name = 'jev-harness-loop'
 export const inject = ['tools']
@@ -40,6 +44,7 @@ const DEFAULT_CHUNK_DIGEST_MAX_CHARS = 2400
 const DEFAULT_SUBGOAL_INFLIGHT_TTL_MS = 30 * 60 * 1000
 const MAX_ACTIVE_PATHS = 32
 const MAX_RECENT_TOOLS = 16
+const JEV_LIVE_CHANNEL = '/jev-harness-live'
 
 const DEPLOY_GOAL_RE = /\bdeploy(?:ment|ing|ed)?\b|发布|部署/i
 const CWD_LINE_RE = /Current working directory:\s*(?:"([^"]+)"|'([^']+)'|([^\r\n]+))/i
@@ -493,6 +498,62 @@ export function apply(ctx, config = {}) {
   })
   const subgoalTracker = createSubgoalTracker({ inFlightTtlMs: cfg.subgoalInFlightTtlMs })
   const telemetry = createTelemetryInstance(cfg)
+  const liveBus = createLiveBus({
+    maxEvents: Number.isInteger(config.liveMaxEvents) && config.liveMaxEvents > 0 ? config.liveMaxEvents : undefined,
+    activeTtlMs: Number.isInteger(config.liveActiveTtlMs) && config.liveActiveTtlMs > 0 ? config.liveActiveTtlMs : undefined,
+  })
+
+  // --- UI self-check diagnostics -------------------------------------------
+  // Writes JSON markers into the telemetry dir so we can tell whether the web
+  // client bundle was actually collected and executed:
+  //   _ui-diag.json   <- this host plugin (always loads) : is our module in the
+  //                      web client module graph?
+  //   _ui-root.json   <- preset host half (only if the self-insert row loads it)
+  //   _client-hello.json <- browser client called the channel (client executed)
+  const diagDir = typeof cfg.telemetryDir === 'string' && cfg.telemetryDir.trim()
+    ? cfg.telemetryDir
+    : join(homedir(), '.dsh', 'jev-decisions')
+  function appendJev(session, type, data) {
+    try {
+      if (session && typeof session.append === 'function') {
+        session.append(type, data)
+        writeDiag('_ui-append.json', { ok: true, type: type, at: new Date().toISOString() })
+        return
+      }
+      writeDiag('_ui-append.json', { ok: false, reason: 'no session.append', hasSession: !!session, type: type })
+    } catch (e) {
+      writeDiag('_ui-append.json', { ok: false, error: String(e && e.message ? e.message : e), type: type })
+    }
+  }
+  function writeDiag(name, obj) {
+    try {
+      mkdirSync(diagDir, { recursive: true })
+      writeFileSync(join(diagDir, name), JSON.stringify({ ts: new Date().toISOString(), ...obj }, null, 2), 'utf8')
+    } catch {
+      /* diagnostics are fail-open */
+    }
+  }
+  try {
+    const cm = typeof ctx?.get === 'function' ? ctx.get('clientModules') : null
+    const g = cm && typeof cm.graph === 'function' ? cm.graph() : null
+    let ids = []
+    if (g) {
+      if (Array.isArray(g.entries)) ids = g.entries.map((e) => (e && (e.id || e.name || e.key)) || '').filter(Boolean)
+      else if (Array.isArray(g)) ids = g.map((e) => (e && (e.id || e.name)) || '').filter(Boolean)
+    }
+    const gs = g ? JSON.stringify(g) : ''
+    writeDiag('_ui-diag.json', {
+      source: 'jev-harness-loop',
+      clientModulesAvailable: !!cm,
+      graphAvailable: !!g,
+      entryCount: ids.length,
+      containsPreset: /@local\/dsh-jevharness-preset/.test(gs),
+      containsAnyJev: /jev/i.test(gs),
+      sampleIds: ids.slice(0, 300),
+    })
+  } catch (err) {
+    writeDiag('_ui-diag.json', { source: 'jev-harness-loop', error: String(err?.message || err) })
+  }
 
   function stateOf(sessionId) {
     let st = sessions.get(sessionId)
@@ -626,6 +687,121 @@ export function apply(ctx, config = {}) {
   }
 
   // ---------------------------------------------------------------------------
+  // Live UI projection channel (host -> client, read-only, zero prompt cost).
+  // Registered through reactive inject so plugin load order never matters, plus
+  // an HTTP hello route and a deferred client-module-graph probe for diagnostics.
+  // ---------------------------------------------------------------------------
+  function registerLiveChannel(connection) {
+    if (!connection) return
+    try {
+      if (connection.rpc && typeof connection.rpc.handle === 'function') {
+        const liveHandler = async (endpoint, payload) => {
+          try {
+            if (endpoint === 'hello') {
+              writeDiag('_client-hello.json', { source: 'rpc', payload: payload && typeof payload === 'object' ? payload : {} })
+              return { ok: true, value: { ack: true } }
+            }
+            if (endpoint === 'probe') return { ok: true, value: liveBus.probe() }
+            const args = payload && typeof payload === 'object' ? payload : {}
+            const sid = typeof args.sessionId === 'string' ? args.sessionId.trim() : ''
+            if (!sid) return { ok: false, error: { code: 'bad-request', message: 'sessionId is required' } }
+            if (endpoint === 'since') return { ok: true, value: liveBus.since(sid, typeof args.cursor === 'number' ? args.cursor : -1) }
+            if (endpoint === 'snapshot') return { ok: true, value: liveBus.since(sid, -1) }
+            return { ok: false, error: { code: 'bad-request', message: 'unknown endpoint: ' + endpoint } }
+          } catch (err) {
+            return { ok: false, error: { code: 'internal', message: String(err && err.message ? err.message : err) } }
+          }
+        }
+        const disposeLive = connection.rpc.handle(JEV_LIVE_CHANNEL, liveHandler)
+        writeDiag('_ui-channel.json', { registered: true })
+        if (typeof ctx.effect === 'function' && typeof disposeLive === 'function') {
+          ctx.effect(() => disposeLive, 'jev-harness: live channel')
+        }
+      }
+    } catch (err) {
+      writeDiag('_ui-channel.json', { registered: false, error: String(err && err.message ? err.message : err) })
+    }
+    try {
+      if (connection.fetch && typeof connection.fetch.register === 'function') {
+        const helloRoute = {
+          path: '/api/jev-harness/hello',
+          methods: ['POST'],
+          requestBody: 'buffered',
+          fetch: async (request) => {
+            let body = {}
+            try { body = await request.json() } catch (e) { body = {} }
+            writeDiag('_client-hello.json', { source: 'http', payload: body })
+            return Response.json({ ok: true })
+          },
+        }
+        const liveRoute = {
+          path: '/api/jev-harness/live',
+          methods: ['POST'],
+          requestBody: 'buffered',
+          fetch: async (request) => {
+            let body = {}
+            try { body = await request.json() } catch (e) { body = {} }
+            const endpoint = body && body.endpoint
+            if (endpoint === 'probe') return Response.json({ ok: true, value: liveBus.probe() })
+            const sid = body && typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+            if (!sid) return Response.json({ ok: false, error: { message: 'sessionId is required' } })
+            const cursor = typeof body.cursor === 'number' ? body.cursor : -1
+            if (endpoint === 'since') return Response.json({ ok: true, value: liveBus.since(sid, cursor) })
+            if (endpoint === 'snapshot') return Response.json({ ok: true, value: liveBus.since(sid, -1) })
+            return Response.json({ ok: false, error: { message: 'unknown endpoint: ' + endpoint } })
+          },
+        }
+        const d1 = connection.fetch.register(helloRoute)
+        const d2 = connection.fetch.register(liveRoute)
+        writeDiag('_ui-route.json', { registered: true, routes: ['/api/jev-harness/hello', '/api/jev-harness/live'] })
+        if (typeof ctx.effect === 'function') {
+          ctx.effect(() => { try { if (d1) d1() } catch (e) { /* ignore */ } try { if (d2) d2() } catch (e) { /* ignore */ } }, 'jev-harness: live routes')
+        }
+      }
+    } catch (err) {
+      writeDiag('_ui-route.json', { registered: false, error: String(err && err.message ? err.message : err) })
+    }
+  }
+  try {
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['connection'], (inner) => {
+        try { registerLiveChannel(inner && inner.connection) } catch (e) { /* fail-open */ }
+      })
+    } else {
+      registerLiveChannel(typeof ctx?.get === 'function' ? ctx.get('connection') : null)
+    }
+  } catch (e) { /* fail-open */ }
+
+  // Deferred client-module-graph probe (service may register after this plugin).
+  function probeClientGraph() {
+    try {
+      const cm = typeof ctx?.get === 'function' ? ctx.get('clientModules') : null
+      const g = cm && typeof cm.graph === 'function' ? cm.graph() : null
+      if (!g) {
+        writeDiag('_ui-graph2.json', { source: 'deferred', graphAvailable: false, clientModulesAvailable: !!cm })
+        return
+      }
+      const gs = JSON.stringify(g)
+      let ids = []
+      if (Array.isArray(g.entries)) ids = g.entries.map((e) => (e && (e.id || e.name || e.key)) || '').filter(Boolean)
+      writeDiag('_ui-graph2.json', {
+        source: 'deferred',
+        graphAvailable: true,
+        entryCount: ids.length,
+        containsPreset: /@local\/dsh-jevharness-preset/.test(gs),
+        containsAnyJev: /jev/i.test(gs),
+        sampleIds: ids.slice(0, 300),
+      })
+    } catch (e) {
+      writeDiag('_ui-graph2.json', { source: 'deferred', error: String(e && e.message ? e.message : e) })
+    }
+  }
+  try {
+    if (typeof ctx.inject === 'function') ctx.inject(['clientModules'], () => { try { probeClientGraph() } catch (e) { /* ignore */ } })
+    for (const ms of [3000, 8000]) { try { const t = setTimeout(probeClientGraph, ms); if (t && typeof t.unref === 'function') t.unref() } catch (e) { /* ignore */ } }
+  } catch (e) { /* fail-open */ }
+
+  // ---------------------------------------------------------------------------
   // Event 1: session/event — strict per-session ledger & typed chunk ingestion
   // ---------------------------------------------------------------------------
   ctx.on('session/event', (session, event) => {
@@ -704,8 +880,18 @@ export function apply(ctx, config = {}) {
         }
       } else if (type === 'step/end') {
         state.steps += 1
+        if (state.isJev) {
+          try { liveBus.push(sessionId, { kind: 'step', turn: state.turns, step: state.steps }) } catch { /* fail-open */ }
+        }
       } else if (type === 'turn/start') {
         state.turns += 1
+        if (state.isJev) {
+          try {
+            liveBus.markJev(sessionId)
+            liveBus.setTurns(sessionId, state.turns)
+            liveBus.push(sessionId, { kind: 'turn', turn: state.turns, step: state.steps })
+          } catch { /* fail-open */ }
+        }
       }
     } catch {
       /* fail-open: never break the durable event feed */
@@ -957,6 +1143,78 @@ export function apply(ctx, config = {}) {
             cacheFrozen,
           })
         }
+
+        // Live UI projection — same decision, pushed into the in-memory bus for
+        // the client HUD / turn-tail. Read-only side channel; not in the prompt.
+        // Estimate token savings from the visibility ladder (chars compressed
+        // away, ~4 chars/token). Best-effort; labeled "估算" in the UI.
+        let savedTokens = 0
+        let ledgerChars = 0
+        try {
+          const perChunk = parsed.chunk_visibility || {}
+          const globalLvl = parsed.context_visibility?.level || 'full'
+          for (const c of chunkMeta) {
+            const chars = typeof c.chars === 'number' ? c.chars : 0
+            ledgerChars += chars
+            const lvl = (perChunk[c.id] && perChunk[c.id].level) || globalLvl
+            const frac = lvl === 'hide' ? 0 : lvl === 'short_summary' ? 0.15 : lvl === 'long_summary' ? 0.4 : 1
+            savedTokens += (chars * (1 - frac)) / 4
+          }
+        } catch {
+          /* estimate is best-effort */
+        }
+        savedTokens = Math.round(savedTokens)
+        try {
+          liveBus.markJev(sessionId)
+          liveBus.push(sessionId, {
+            kind: 'decision',
+            turn: state.turns,
+            step: state.steps,
+            model: parsed.model || cfg.model,
+            lines: {
+              context_visibility: parsed.context_visibility?.level ?? null,
+              cache: parsed.cache_prefix?.action ?? null,
+              routing: parsed.routing?.value ?? null,
+              tools: parsed.tools?.value ?? null,
+              permissions: parsed.permissions?.action ?? null,
+              security: parsed.security?.level ?? null,
+            },
+            decisionLine: (decisionText.split('\n')[1] || '').trim(),
+            directives: (decisionText.split('\n')[2] || '').trim(),
+            latencyMs: freshCallResult?.latencyMs ?? parsed.latencyMs ?? null,
+            chunkCount: chunkMeta.length,
+            rulesCount: Array.isArray(condResult?.rules) ? condResult.rules.length : 0,
+            cacheFrozen,
+            savedTokens,
+            ledgerChars,
+          })
+        } catch {
+          /* live projection is fail-open */
+        }
+        // Durable log-only event: reaches the client renderer through the
+        // standard session event stream (Conversation Node). This is the
+        // supported cross-process path, unlike custom /api or rpc routes.
+        try {
+          appendJev(context && context.agent && context.agent.session, 'jev/decision', {
+            turn: state.turns,
+            step: state.steps,
+            model: parsed.model || cfg.model,
+            lines: {
+              context_visibility: parsed.context_visibility?.level ?? null,
+              cache: parsed.cache_prefix?.action ?? null,
+              routing: parsed.routing?.value ?? null,
+              tools: parsed.tools?.value ?? null,
+              permissions: parsed.permissions?.action ?? null,
+              security: parsed.security?.level ?? null,
+            },
+            latencyMs: freshCallResult?.latencyMs ?? parsed.latencyMs ?? null,
+            chunkCount: chunkMeta.length,
+            rulesCount: Array.isArray(condResult?.rules) ? condResult.rules.length : 0,
+            cacheFrozen,
+            savedTokens,
+            ledgerChars,
+          })
+        } catch (e) { /* fail-open */ }
       }
 
       if (condResult && condResult.rendered) {
@@ -1028,6 +1286,29 @@ export function apply(ctx, config = {}) {
           ruleId: verdict.ruleId,
           reason: verdict.reason,
         })
+        try {
+          liveBus.push(sessionId, {
+            kind: 'gate',
+            turn: state.turns,
+            step: state.steps,
+            toolName,
+            verdict: verdict.kind,
+            ruleId: verdict.ruleId,
+            reason: verdict.reason,
+          })
+        } catch {
+          /* live projection is fail-open */
+        }
+        try {
+          appendJev(exec && exec.agent && exec.agent.session, 'jev/gate', {
+            turn: state.turns,
+            step: state.steps,
+            toolName,
+            verdict: verdict.kind,
+            ruleId: verdict.ruleId,
+            reason: verdict.reason,
+          })
+        } catch (e) { /* fail-open */ }
         return { kind: verdict.kind, reason: verdict.reason }
       }
 
@@ -1114,6 +1395,7 @@ export function apply(ctx, config = {}) {
         chunkStore.clearSession(sessionId)
         subgoalTracker.clearSession(sessionId)
         telemetry.clearSession(sessionId)
+        try { liveBus.clear(sessionId) } catch { /* fail-open */ }
       } catch {
         /* fail-open */
       }
