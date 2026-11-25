@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-jevharness-preset",
-  "version": "2.2.6",
+  "version": "2.3.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -18,7 +18,9 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "bench": "node bench/suite.mjs",
-    "report": "node scripts/jev-report.mjs"
+    "report": "node scripts/jev-report.mjs",
+    "repair-logs": "node scripts/repair-jev-session-logs.mjs",
+    "repair-logs:dry": "node scripts/repair-jev-session-logs.mjs --dry-run"
   },
   "dsh": {
     "bundle": {

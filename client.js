@@ -76,6 +76,11 @@ window.__ModuleLoader__.load({
         '.jev-dock-sticky{position:sticky;bottom:0;z-index:6;backdrop-filter:blur(6px)}',
         '.jev-dock-sub{color:var(--dsw-alias-fg-secondary,#a9b4c0);font-weight:500}',
         '.jev-receipt-wrap{margin:8px 0}',
+        '.jev-turns{margin:6px 12px;display:flex;flex-direction:column;gap:3px}',
+        '.jev-turn-row{display:flex;align-items:center;gap:6px;padding:4px 7px;border-radius:6px;background:rgba(124,92,255,.08);border:1px solid rgba(124,92,255,.18);font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--dsw-alias-fg-secondary,#a9b4c0);flex-wrap:wrap}',
+        '.jev-turn-row b{color:var(--dsw-alias-fg,#e8edf3);font-weight:600}',
+        '.jev-turn-label{color:#cdbfff;font-weight:700;min-width:46px}',
+        '.jev-rate{color:#7ee787;font-weight:700}',
       ].join('\n')
       const tag = document.createElement('style')
       tag.setAttribute('data-plugin', '@local/dsh-jevharness-preset')
@@ -110,8 +115,81 @@ window.__ModuleLoader__.load({
       for (const fn of settled.listeners) { try { fn() } catch (e) { /* ignore */ } }
     }
     function useSettled() { const [, f] = React.useState(0); React.useEffect(() => { const fn = () => f((x) => x + 1); settled.listeners.add(fn); return () => { settled.listeners.delete(fn) } }, []); return settled }
-    function hudSet(s) { hud.latest = s; touchActivity(s); for (const fn of hud.listeners) { try { fn() } catch (e) { /* ignore */ } } }
+    function hudSet(s) { hud.latest = enrichState(s); touchActivity(s); for (const fn of hud.listeners) { try { fn() } catch (e) { /* ignore */ } } }
     function useHud() { const [, f] = React.useState(0); React.useEffect(() => { const fn = () => f((x) => x + 1); hud.listeners.add(fn); return () => { hud.listeners.delete(fn) } }, []); return hud.latest }
+
+    // ---- JeV event kinds ----
+    // Durable JeV events are persisted as host plugin records
+    // ('plugin:jev-harness/decision' | '.../gate' | '.../receipt', ignorable:true)
+    // so a reopened session never rejects the log. Legacy logs used bare
+    // 'jev/decision' etc.; recognize both so old and new logs render identically.
+    const JEV_PLUGIN_PREFIX = 'plugin:jev-harness/'
+    function jevKindOf(type) {
+      if (typeof type !== 'string') return null
+      if (type === 'jev/decision' || type === JEV_PLUGIN_PREFIX + 'decision') return 'decision'
+      if (type === 'jev/gate' || type === JEV_PLUGIN_PREFIX + 'gate') return 'gate'
+      if (type === 'jev/receipt' || type === JEV_PLUGIN_PREFIX + 'receipt') return 'receipt'
+      return null
+    }
+
+    // ---- cross-turn ledger (all turns, not just the live one) ----
+    // Every jev/decision and jev/gate event folds into a per-turn row, so cards
+    // and the deep console can show cumulative totals and a savings ratio.
+    const turnLedger = new Map()
+    // Highest host turn index observed (from any event carrying data.turn, incl.
+    // turn/start & turn/end). Lets the round count reflect real conversation
+    // turns even when a turn produced no JeV decision event.
+    let maxTurnSeen = 0
+    function noteTurn(ev) { const t = ev && ev.data && ev.data.turn; if (typeof t === 'number' && isFinite(t) && t > maxTurnSeen) maxTurnSeen = t }
+    function turnRow(n) {
+      const key = typeof n === 'number' ? n : 0
+      let r = turnLedger.get(key)
+      if (!r) {
+        r = { turn: key, decisions: 0, gates: 0, denies: 0, savedTokens: 0, ledgerChars: 0, cacheReuse: 0 }
+        turnLedger.set(key, r)
+      }
+      return r
+    }
+    function recordJevEvent(ev) {
+      try {
+        const d = (ev && ev.data) || {}
+        const r = turnRow(typeof d.turn === 'number' ? d.turn : 0)
+        if (jevKindOf(ev && ev.type) === 'decision') {
+          r.decisions += 1
+          r.savedTokens += typeof d.savedTokens === 'number' ? d.savedTokens : 0
+          r.ledgerChars += typeof d.ledgerChars === 'number' ? d.ledgerChars : 0
+          if (d.cacheFrozen) r.cacheReuse += 1
+        } else if (jevKindOf(ev && ev.type) === 'gate') {
+          r.gates += 1
+          if (d.verdict === 'deny') r.denies += 1
+        }
+      } catch (e) { /* ledger is fail-open */ }
+    }
+    function savingRate(tokens, chars) {
+      const budget = (typeof chars === 'number' ? chars : 0) / 4
+      return budget > 0 ? Math.max(0, Math.min(100, Math.round(((typeof tokens === 'number' ? tokens : 0) / budget) * 100))) : 0
+    }
+    function turnRows() {
+      return Array.from(turnLedger.values()).sort((a, b) => a.turn - b.turn)
+        .map((r) => Object.assign({}, r, { rate: savingRate(r.savedTokens, r.ledgerChars) }))
+    }
+    function ledgerTotals() {
+      const rows = turnRows()
+      const t = rows.reduce((a, r) => ({
+        decisions: a.decisions + r.decisions,
+        gates: a.gates + r.gates,
+        denies: a.denies + r.denies,
+        savedTokens: a.savedTokens + r.savedTokens,
+        ledgerChars: a.ledgerChars + r.ledgerChars,
+        cacheReuse: a.cacheReuse + r.cacheReuse,
+      }), { decisions: 0, gates: 0, denies: 0, savedTokens: 0, ledgerChars: 0, cacheReuse: 0 })
+      t.rounds = Math.max(rows.length, maxTurnSeen)
+      t.rate = savingRate(t.savedTokens, t.ledgerChars)
+      return t
+    }
+    function enrichState(s) {
+      return s ? Object.assign({}, s, { turns: turnRows(), totals: ledgerTotals() }) : s
+    }
 
     // ---- session-scoped UI gating ----
     // The four native slots are explicit only in a started JEVHarness session.
@@ -153,9 +231,12 @@ window.__ModuleLoader__.load({
       return hasJevState()
     }
     function noteSession(ev) {
+      noteTurn(ev)
       const sid = ev && ev.data && ev.data.sessionId
       if (typeof sid !== 'string' || sid === activeSessionId) return false
       activeSessionId = sid
+      maxTurnSeen = 0
+      turnLedger.clear()
       hud.latest = null
       settled.snap = null
       settled.mode = false
@@ -168,14 +249,15 @@ window.__ModuleLoader__.load({
     // ---- state fold ----
     function initState(ev) {
       const turn = ev.data && typeof ev.data.turn === 'number' ? ev.data.turn : 0
-      return { turn: turn, decisions: ev.type === 'jev/decision' ? [ev.data] : [], gates: ev.type === 'jev/gate' ? [ev.data] : [], chunkLadder: (ev.data && ev.data.chunkLadder) || [], ruleHits: (ev.data && ev.data.ruleHits) || [] }
+      return { turn: turn, decisions: jevKindOf(ev.type) === 'decision' ? [ev.data] : [], gates: jevKindOf(ev.type) === 'gate' ? [ev.data] : [], chunkLadder: (ev.data && ev.data.chunkLadder) || [], ruleHits: (ev.data && ev.data.ruleHits) || [] }
     }
     function foldState(state, ev) {
       const s = state || { turn: 0, decisions: [], gates: [], chunkLadder: [], ruleHits: [] }
       const turn = ev.data && typeof ev.data.turn === 'number' ? ev.data.turn : s.turn
-      if (ev.type === 'jev/decision') {
+      if (jevKindOf(ev.type) === 'decision') {
         const step = ev.data && ev.data.step
-        const decisions = s.decisions.filter(function (d) { return step === undefined || d.step !== step }).concat([ev.data])
+        const keyOf = function (d) { return (d && typeof d.turn === 'number' ? d.turn : 'x') + ':' + (d && d.step) }
+        const decisions = s.decisions.filter(function (d) { return step === undefined || keyOf(d) !== keyOf(ev.data) }).concat([ev.data])
         return { turn: turn, decisions: decisions, gates: s.gates, chunkLadder: ev.data.chunkLadder || s.chunkLadder, ruleHits: ev.data.ruleHits || s.ruleHits }
       }
       return { turn: turn, decisions: s.decisions, gates: s.gates.concat([ev.data]), chunkLadder: s.chunkLadder, ruleHits: s.ruleHits }
@@ -185,14 +267,14 @@ window.__ModuleLoader__.load({
       kind: KIND,
       target: 'chat',
       match: function (event) {
-        if (event && (event.type === 'jev/decision' || event.type === 'jev/gate')) {
+        if (event && (jevKindOf(event.type) === 'decision' || jevKindOf(event.type) === 'gate')) {
           const turn = event.data && typeof event.data.turn === 'number' ? event.data.turn : 0
           return { id: 't' + turn, role: 'start' }
         }
         return null
       },
-      start: function (_context, match) { noteSession(match.event); const s = initState(match.event); hudSet(s); return s },
-      update: function (context, match) { const reset = noteSession(match.event); const s = reset ? initState(match.event) : foldState(context && context.state, match.event); hudSet(s); return s },
+      start: function (_context, match) { noteSession(match.event); recordJevEvent(match.event); const s = initState(match.event); hudSet(s); return s },
+      update: function (context, match) { const reset = noteSession(match.event); recordJevEvent(match.event); const s = reset ? initState(match.event) : foldState(context && context.state, match.event); hudSet(s); return s },
       publication: function () { return 'immediate' },
       // Live state is projected into conversation.input.dock at the bottom of
       // the conversation. The Definition still folds events, but must not anchor
@@ -207,7 +289,7 @@ window.__ModuleLoader__.load({
       kind: RECEIPT_KIND,
       target: 'chat',
       match: function (event) {
-        if (event && (event.type === 'turn/end' || event.type === 'jev/receipt')) {
+        if (event && (event.type === 'turn/end' || jevKindOf(event.type) === 'receipt')) {
           if (!hasJevState()) return null
           const d = event.data || {}
           const turn = typeof d.turn === 'number' ? d.turn : (typeof event.turn === 'number' ? event.turn : 0)
@@ -215,10 +297,11 @@ window.__ModuleLoader__.load({
         }
         return null
       },
-      start: function (match) { noteSession(match && match.event); const s = Object.assign({}, hud.latest || { turn: 0, decisions: [], gates: [] }); s.endedAt = Date.now(); settleNow(s); return s },
+      start: function (match) { noteSession(match && match.event); recordJevEvent(match && match.event); const s = enrichState(Object.assign({}, hud.latest || { turn: 0, decisions: [], gates: [] })); s.endedAt = Date.now(); settleNow(s); return s },
       update: function (context, match) {
         noteSession(match && match.event)
-        const s = Object.assign({}, hud.latest || (context && context.state) || { turn: 0, decisions: [], gates: [] })
+        recordJevEvent(match && match.event)
+        const s = enrichState(Object.assign({}, hud.latest || (context && context.state) || { turn: 0, decisions: [], gates: [] }))
         s.turn = match && match.event && match.event.data && typeof match.event.data.turn === 'number' ? match.event.data.turn : s.turn
         s.endedAt = Date.now()
         settleNow(s)
@@ -234,7 +317,14 @@ window.__ModuleLoader__.load({
       },
     }
 
-    function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n) }
+    function fmtTok(n) {
+      const v = typeof n === 'number' && isFinite(n) ? n : 0
+      const a = Math.abs(v)
+      if (a >= 1e9) return (v / 1e9).toFixed(2) + 'B'
+      if (a >= 1e6) return (v / 1e6).toFixed(2) + 'M'
+      if (a >= 1e3) return (v / 1e3).toFixed(1) + 'k'
+      return String(v)
+    }
     function JevCard(props) {
       React.useEffect(() => { ensureStyles() }, [])
       const s = props.state || { turn: 0, decisions: [], gates: [] }
@@ -243,22 +333,38 @@ window.__ModuleLoader__.load({
       const gates = s.gates || []
       const last = decs.length ? decs[decs.length - 1] : null
       const denyGates = gates.filter((g) => g.verdict === 'deny')
-      const savedT = decs.reduce((a, d) => a + (typeof d.savedTokens === 'number' ? d.savedTokens : 0), 0)
-      const reuseN = decs.filter((d) => d.cacheFrozen).length
-      const reuseRate = decs.length ? Math.round((reuseN / decs.length) * 100) : 0
+      const rounds = s.turns || turnRows()
+      const tot = s.totals || ledgerTotals()
+      const savedT = tot.savedTokens
+      const reuseRate = tot.decisions ? Math.round((tot.cacheReuse / tot.decisions) * 100) : 0
       const lat = last && typeof last.latencyMs === 'number' ? Math.round(last.latencyMs) : null
       const head = h('div', { className: 'jev-card-head' },
         h('span', { className: 'jev-card-title' }, props && props.receipt ? 'JEV 治理回执' : 'JEV 实时介入'),
         h('span', { className: 'jev-dot' }),
-        h('span', { className: 'jev-card-sub' }, '· ' + decs.length + ' 步决策' + (gates.length ? ' · ' + gates.length + ' 次拦截' : '') + (lat !== null ? ' · ' + lat + 'ms' : '')),
+        h('span', { className: 'jev-card-sub' }, '· 全会话 ' + tot.rounds + ' 轮 · ' + tot.decisions + ' 步决策' + (tot.gates ? ' · ' + tot.gates + ' 次拦截' : '') + (lat !== null ? ' · ' + lat + 'ms' : '')),
         denyGates.length ? h('span', { className: 'jev-tag jev-tag-deny' }, '拦截') : null)
       const shield = denyGates.length ? h('div', { className: 'jev-shield' },
         h('span', { className: 'jev-shield-ic' }, '🛡'),
         h('span', null, 'JEVHarness 已拦截 ' + denyGates.length + ' 次：' + (denyGates[0].ruleId || 'policy')),
         denyGates[0].reason ? h('span', { className: 'jev-card-sub' }, '— ' + String(denyGates[0].reason).slice(0, 90)) : null) : null
+      // All-turn rollup: one compact row per turn, then totals and savings rate.
+      // This survives past turns; the step-flow below shows the live turn's detail.
+      const turnBlock = h('div', { className: 'jev-turns' }, rounds.length ? rounds.map((r) =>
+        h('div', { key: 'turn-' + r.turn, className: 'jev-turn-row' },
+          h('span', { className: 'jev-turn-label' }, '第 ' + r.turn + ' 轮'),
+          h('span', null, '决策 '), h('b', null, String(r.decisions)),
+          h('span', null, '· 拦截 '), h('b', null, String(r.gates)),
+          h('span', null, '· 省 '), h('b', null, fmtTok(r.savedTokens)),
+          h('span', { className: 'jev-rate' }, r.rate + '%'))) : null)
+      const totalsRow = h('div', { className: 'jev-turn-row' },
+        h('span', { className: 'jev-turn-label' }, '合计'),
+        h('span', null, '决策 '), h('b', null, String(tot.decisions)),
+        h('span', null, '· 拦截 '), h('b', null, String(tot.gates)),
+        h('span', null, '· 省 '), h('b', null, fmtTok(tot.savedTokens)),
+        h('span', { className: 'jev-rate' }, '省 ' + tot.rate + '%'))
       // Full step-flow projection: every decision and every gate, ordered.
       // The card keeps its 220px cap, so a long stream scrolls inside the card.
-      const rows = []
+      const rows = turnBlock ? [turnBlock, totalsRow] : []
       for (const d of decs) {
         const L = d.lines || {}
         rows.push(h('div', { key: 'd' + (d.step || 0) + '-' + rows.length, className: 'jev-row' },
@@ -275,10 +381,10 @@ window.__ModuleLoader__.load({
           h('b', null, g.toolName || 'tool'), h('span', null, '· ' + (g.ruleId || ''))))
       }
       const metrics = h('div', { className: 'jev-kv' },
-        h('span', { className: 'jev-metric' }, 'KV 复用率 ' + reuseRate + '%'),
-        h('span', { className: 'jev-metric' }, '省约 ' + fmtTok(savedT) + ' tokens'),
-        h('span', { className: 'jev-metric' }, '决策 ' + decs.length + ' · 拦截 ' + gates.length))
-      const brand = m === 'showcase' ? h('div', { className: 'jev-brand' }, '⚡ Powered by JEVHarness · 实时六维治理 · ' + decs.length + ' 步决策 / ' + gates.length + ' 次拦截 / 省约 ' + fmtTok(savedT) + ' tokens') : null
+        h('span', { className: 'jev-metric' }, '全会话 ' + tot.rounds + ' 轮 · KV 复用 ' + reuseRate + '%'),
+        h('span', { className: 'jev-metric' }, '省约 ' + fmtTok(savedT) + ' tokens · ' + tot.rate + '%'),
+        h('span', { className: 'jev-metric' }, '决策 ' + tot.decisions + ' · 拦截 ' + tot.gates))
+      const brand = m === 'showcase' ? h('div', { className: 'jev-brand' }, '⚡ Powered by JEVHarness · ' + tot.rounds + ' 轮 / ' + tot.decisions + ' 步决策 / ' + tot.gates + ' 次拦截 / 省约 ' + fmtTok(savedT) + ' tokens (' + tot.rate + '%)') : null
       return h('div', { className: 'jev-card' }, head,
         h('div', { className: 'jev-card-body' }, shield, rows), metrics, brand)
     }
@@ -375,8 +481,10 @@ window.__ModuleLoader__.load({
       const last = decs.length ? decs[decs.length - 1] : null
       const L = (last && last.lines) || {}
       const denyGates = gates.filter((g) => g.verdict === 'deny')
-      const savedT = decs.reduce((a, d) => a + (typeof d.savedTokens === 'number' ? d.savedTokens : 0), 0)
-      const reuseRate = decs.length ? Math.round((decs.filter((d) => d.cacheFrozen).length / decs.length) * 100) : 0
+      const rounds = s.turns || turnRows()
+      const tot = s.totals || ledgerTotals()
+      const savedT = tot.savedTokens
+      const reuseRate = tot.decisions ? Math.round((tot.cacheReuse / tot.decisions) * 100) : 0
       const counts = {}
       for (const x of LADDER) counts[x.key] = 0
       for (const c of chunks) { if (counts[c.visibility] !== undefined) counts[c.visibility] += 1 }
@@ -386,7 +494,7 @@ window.__ModuleLoader__.load({
       const head = h('div', { className: 'jev-card-head' },
         h('span', { className: 'jev-card-title' }, 'JEV 深度决策台'),
         h('span', { className: 'jev-dot' }),
-        h('span', { className: 'jev-card-sub' }, ' · 本回合 ' + decs.length + ' 步治理决策的明细' + (denyGates.length ? ' · 拦截 ' + denyGates.length + ' 次' : '') + fullscreen),
+        h('span', { className: 'jev-card-sub' }, ' · 全会话 ' + tot.rounds + ' 轮 · ' + tot.decisions + ' 步治理决策' + (tot.gates ? ' · 拦截 ' + tot.gates + ' 次' : '') + ' · 省 ' + tot.rate + '%' + fullscreen),
         denyGates.length ? h('span', { className: 'jev-tag jev-tag-deny' }, '拦截') : null)
       const shield = denyGates.length ? h('div', { className: 'jev-shield' },
         h('span', { className: 'jev-shield-ic' }, '🛡'),
@@ -419,6 +527,25 @@ window.__ModuleLoader__.load({
           h('span', { className: 'jev-card-sub' }, '— 本回合共 ' + decs.length + ' 步决策 · ' + gates.length + ' 次拦截')),
         h('div', { className: 'jev-stream' }, streamRows.length ? streamRows : h('div', { className: 'jev-empty' }, '等待本回合的决策事件…')))
 
+      // All-turn governance summary: every turn's decisions, gates and saved
+      // tokens plus the cumulative total and the savings ratio.
+      const summarySec = h('div', { className: 'jev-deep-sec' },
+        h('div', { className: 'jev-row' }, h('b', null, '逐轮汇总'),
+          h('span', { className: 'jev-card-sub' }, '— 每轮决策 / 拦截 / 估算省 token 及节省比例')),
+        h('div', { className: 'jev-turns' }, rounds.length ? rounds.map((r) =>
+          h('div', { key: 'sum-' + r.turn, className: 'jev-turn-row' },
+            h('span', { className: 'jev-turn-label' }, '第 ' + r.turn + ' 轮'),
+            h('span', null, '决策 '), h('b', null, String(r.decisions)),
+            h('span', null, '· 拦截 '), h('b', null, String(r.gates)),
+            h('span', null, '· KV复用 '), h('b', null, String(r.cacheReuse)),
+            h('span', null, '· 省 '), h('b', null, fmtTok(r.savedTokens)),
+            h('span', { className: 'jev-rate' }, '省 ' + r.rate + '%'))) : h('div', { className: 'jev-empty' }, '等待会话事件…')),
+        h('div', { className: 'jev-turn-row' },
+          h('span', { className: 'jev-turn-label' }, '合计'),
+          h('span', null, tot.rounds + ' 轮 · 决策 '), h('b', null, String(tot.decisions)),
+          h('span', null, '· 拦截 '), h('b', null, String(tot.gates)),
+          h('span', null, '· 省 '), h('b', null, fmtTok(tot.savedTokens)),
+          h('span', { className: 'jev-rate' }, '省 ' + tot.rate + '%')))
       const ladderSec = h('div', { className: 'jev-deep-sec' },
         h('div', { className: 'jev-row' }, h('b', null, '上下文处理'),
           h('span', { className: 'jev-card-sub' }, '— 共 ' + chunks.length + ' 份资料，按重要性决定给模型看多少')),
@@ -463,15 +590,15 @@ window.__ModuleLoader__.load({
           })))
 
       const metrics = h('div', { className: 'jev-kv' },
-        h('span', { className: 'jev-metric' }, 'KV 复用率 ' + reuseRate + '%'),
-        h('span', { className: 'jev-metric' }, '省约 ' + fmtTok(savedT) + ' tokens'),
-        h('span', { className: 'jev-metric' }, '决策 ' + decs.length + ' · 拦截 ' + gates.length))
-      const brand = getMode() === 'showcase' ? h('div', { className: 'jev-brand' }, '⚡ Powered by JEVHarness · 实时六维治理 · 本回合省约 ' + fmtTok(savedT) + ' tokens') : null
+        h('span', { className: 'jev-metric' }, '全会话 ' + tot.rounds + ' 轮 · KV 复用 ' + reuseRate + '%'),
+        h('span', { className: 'jev-metric' }, '省约 ' + fmtTok(savedT) + ' tokens · ' + tot.rate + '%'),
+        h('span', { className: 'jev-metric' }, '决策 ' + tot.decisions + ' · 拦截 ' + tot.gates))
+      const brand = getMode() === 'showcase' ? h('div', { className: 'jev-brand' }, '⚡ Powered by JEVHarness · 全会话 ' + tot.rounds + ' 轮省约 ' + fmtTok(savedT) + ' tokens (' + tot.rate + '%)') : null
 
       return h('div', { className: 'jev-card jev-deep-card' },
         head, shield,
         h('div', { className: 'jev-deep-title' }, '六步决策 · 逐项说明'), dimRows,
-        streamSec, ladderSec, flowSec, ruleSec, metrics, brand)
+        summarySec, streamSec, ladderSec, flowSec, ruleSec, metrics, brand)
     }
 
     // Bottom-of-conversation live projection. conversation.input.dock is a

@@ -81,7 +81,7 @@ test('ui: live intervention docks at the conversation bottom, never at top', () 
 test('ui: turn-end governance receipt anchors at the end of the flow', () => {
   assert.match(client, /RECEIPT_KIND = KIND \+ '-receipt'/)
   assert.match(client, /event\.type === 'turn\/end'/)
-  assert.match(client, /event\.type === 'jev\/receipt'/)
+  assert.match(client, /jevKindOf\(event\.type\) === 'receipt'/)
   assert.match(client, /name: 'conversation\.chat\.node', key: RECEIPT_KIND/)
   assert.match(client, /JevReceiptView/)
   assert.match(client, /JEV 治理回执/)
@@ -147,7 +147,44 @@ test('ui: four native slots stay hidden outside a started JEV session', () => {
   assert.match(client, /if \(!hasJevState\(\)\) return null/)
 })
 
-test('host: jev events carry sessionId for UI session gating', () => {
-  assert.match(loop, /const sid = session\.id \|\| session\.sessionId \|\| null/)
+
+test('ui: all-turn ledger accumulates decisions, gates and savings', () => {
+  for (const literal of [
+    'const turnLedger = new Map()',
+    'function recordJevEvent(ev)',
+    'function savingRate(tokens, chars)',
+    'function turnRows()',
+    'function ledgerTotals()',
+    'function enrichState(s)',
+    'turnLedger.clear()',
+    'recordJevEvent(match.event)',
+    'hud.latest = enrichState(s)',
+  ]) assert.ok(client.includes(literal), 'missing: ' + literal)
+})
+
+test('ui: card shows per-turn rollup and all-turn totals with savings ratio', () => {
+  for (const literal of [
+    "' · 全会话 ' + tot.rounds + ' 轮 · '",
+    "'第 ' + r.turn + ' 轮'",
+    'jev-turn-row',
+    "'合计'",
+    "'省约 ' + fmtTok(savedT) + ' tokens · ' + tot.rate + '%'",
+  ]) assert.ok(client.includes(literal), 'missing: ' + literal)
+})
+
+test('ui: deep console shows per-turn summary before the live stream', () => {
+  assert.match(client, /const summarySec = h\('div', \{ className: 'jev-deep-sec'/)
+  assert.match(client, /逐轮汇总/)
+  assert.match(client, /summarySec, streamSec, ladderSec, flowSec, ruleSec, metrics, brand/)
+})
+
+test('host: jev events are persisted as host plugin records (log stays loadable)', () => {
+  // Durability contract: never write a new bare top-level event type (that makes
+  // the log unreadable on reopen). Use the host appendPluginRecord channel, which
+  // stamps ignorable:true under the plugin: namespace.
+  assert.match(loop, /const sid = session && \(session\.id \|\| session\.sessionId\)/)
   assert.match(loop, /Object\.assign\(\{\}, data, \{ sessionId: sid \}\)/)
+  assert.match(loop, /appendPluginRecord\(session, pluginType, payload\)/)
+  assert.match(loop, /'plugin:jev-harness\/'/)
+  assert.match(loop, /function toPluginRecordType\(type\)/)
 })

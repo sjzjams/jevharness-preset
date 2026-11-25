@@ -1,11 +1,11 @@
-# JEVHarness 自定义预设（v2.2.6）
+# JEVHarness 自定义预设（v2.3.0）
 
 > 把《JEV ENGINEERING FOR CODING AGENTS》（2026 工作笔记）转化为 DeepSeek Harness 可执行插件架构的 Agent 预设。
 > 通过**按会话严格隔离**的显式类型化状态账本，在每步模型生成前批量向 TypeSafe JeV 询问 Table I 六大决策与 per-chunk 可见性，并由确定性代码执行安全闸门、条件规则挂载、子目标去重/读写锁与异步 JSONL 可观测。
 
 - 声明 id：`jevharness`
 - 显示名：`JEVHarness`
-- Bundle：`@local/dsh-jevharness-preset`（`v2.2.6`）
+- Bundle：`@local/dsh-jevharness-preset`（`v2.2.7`）
 - 基础：官方 `ptc` 预设 + 零外部依赖纯 Node 20+ ESM 插件层
 - 依据：《JEV ENGINEERING FOR CODING AGENTS》（Diogo Almeida / TypeSafe 设计笔记综合版）
 
@@ -57,7 +57,7 @@ plugin_manager action=install_bundle target=<绝对路径>\jevharness-preset
 本地开发验证（零外部依赖，Node 20+ 即可运行）：
 
 ```bash
-# 运行全部 82 项单元测试与端到端集成测试
+# 运行全部 90 项单元测试与端到端集成测试
 npm test
 
 # 运行 4 类多场景离线基准
@@ -114,6 +114,7 @@ npm run report
 - **三种显示模式**：`实时 / 精简 / 演示`，持久化于 `localStorage`，由输入药丸循环切换。
 - **自注册机制**：`package.json` 的 `exports["./client"]` 与 `dsh.client`（`platform=web`，`inject` 含 `@deepseek-ai/dsh-client-ui-sidebar-right`）让 `client.js` 进入浏览器 bundle；`cordis.patch.yml` 末尾 `jevharness-ui` 自插入行让包根 `index.js` 被实例化。`index.js` 写 `~/.dsh/jev-decisions/_ui-root.json` 自检标记。
 - **会话级门控**：四处 UI 槽位只在已开始的 JEVHarness 会话显式显示。`jev/decision` / `jev/gate` / `jev/receipt` 事件携带 `sessionId`；客户端用槽位会话 id、空白会话标记与 JeV 事件态过滤，新建对话或非 JEV 会话不渲染。
+- **全轮次汇总**：客户端按会话维护逐轮账本（决策数 / 拦截数 / KV 复用 / 估算省 token）；实时卡与回执卡显示每轮一行 + 全会话合计，深度决策台新增「逐轮汇总」分区，并给出节省比例（省下 token ÷ 可见性阶梯理论全量 token），切换会话即清空重算。
 
 ### 3.6 深度决策台（v2.2.0 新增 · H 分期 Phase 3）
 
@@ -123,6 +124,15 @@ npm run report
 - **零 prompt 成本**：以上字段只进 UI 旁路事件，不进 `system-prompt/assemble`，不破坏冻结的 KV Cache 前缀。
 
 ---
+
+### 3.7 会话事件持久化契约（v2.2.8 新增 · 防「重启后打不开」）
+
+宿主 `@deepseek-ai/dsh-session` 的事件词表是**封闭**的：读取时会逐条校验 `KNOWN_SESSION_EVENT_TYPES`，未知类型**只有带 `ignorable:true` 才会被跳过**，否则整份日志被拒绝解释（`SessionFormatUnsupportedError`）。实时 `session.append(type,data)` **无法**设置 `ignorable`，所以插件绝不能往里塞新类型。
+
+正确做法（本插件已改）：用宿主唯一支持的 `appendPluginRecord(session, 'plugin:jev-harness/<name>', data)`，它自动打上 `ignorable:true` 并入 `plugin:` 命名空间，读写都兼容。UI 仍是普通会话事件，前端 `jevKindOf()` 同时识别旧 `jev/*` 与新 `plugin:jev-harness/*`。
+
+历史坏日志修复：`pnpm run repair-logs`（或 `node scripts/repair-jev-session-logs.mjs --dry-run` 先看）。插件启动 3s 后也会后台自愈一次（`_ui-repair.json` 记录结果），对历史 `jev/*` 事件无损改标、自动备份并原子替换，跳过正在写入的文件。
+
 
 ## 4. 可观测与报表
 
@@ -217,6 +227,10 @@ npm run report
 
 | 版本 | 说明 |
 |---|---|
+| `v2.3.0` | 修复「已是多轮但卡片/决策台仍显示 1 轮」：① 上一版把事件改走 `appendPluginRecord` 后，`import('@deepseek-ai/dsh-session')` 在 link: 安装下解析失败（`_ui-append.json: no host appendPluginRecord`），导致重启后不再写入任何 decision —— 改为优先从 `process.resourcesPath/app.asar/...` 的宿主模块路径导入（同一实例），失败再回退裸包名；② 轮数改取宿主权威 turn 索引（`turn/start.data.turn`），并按 turn/start、turn/end 计轮，某轮无决策也能正确显示；③ 历史日志可用 `repair-logs` 修正被进程内计数器重置写错的 turn 号。测试 90→92 全绿。 |
+| `v2.2.9` | 修复「省 tokens」口径与单位：① `fmtTok()` 增加 M/B 档（≥1000k 不再显示 1000.0k，1.026M 显示 1.03M）；② `savedTokens` 改为**按 chunk 高水位去重**——同一 chunk 跨步只计一次增量，不再每步重复累加。实测旧口径虚高约 12–16 倍（e86f7ea1：0.80M→修正 0.06M；261270eb：1.03M→0.045M）。测试 90 项全绿。 |
+| `v2.2.8` | **彻底修复「重启后会话打不开」反复问题**：根因是 jev-harness-loop 早期用 `session.append('jev/decision'\|'jev/gate'\|'jev/receipt', …)` 写入宿主不认识的新事件类型且未带 `ignorable:true`，宿主读取器 `validateStoredEvents()` 会因此拒绝解释整份日志。改为走宿主唯一支持的 `appendPluginRecord(session, 'plugin:jev-harness/*', data)` 通道（自动 `ignorable:true`）；客户端同时识别新旧两种类型。新增 `shared/session-log-repair.mjs` + `scripts/repair-jev-session-logs.mjs`（`pnpm run repair-logs`），并在插件启动时后台自愈：把历史 `jev/*` 事件无损改标为 `plugin:jev-harness/*`（自动备份、原子替换、跳过在用文件）。测试 87 → 90 项全绿。 |
+| `v2.2.7` | 实时卡与治理回执改为全会话视角：逐轮决策 / 拦截 / KV 复用 / 估算省 token 一行呈现，末尾合计并计算节省比例；深度决策台新增「逐轮汇总」分区，合计指标与品牌水印同步为累计值；切换会话清空逐轮账本。新增 3 项回归测试（共 87 项，86 通过 / 1 既有 HTTP 超时用例取消）。 |
 | `v2.2.6` | 卡片改为 head / body / footer 三段结构：头部与指标底固定，只让决策行区域滚动。测试 81 → 82 项全绿。 |
 | `v2.2.5` | 卡片逐步流改为渲染全部决策与拦截行，沿用 220px 卡片高度，超出内部滚动；深度决策台新增「实时决策数据流」分区，列出本回合全部决策与拦截（180px 内部滚动）。测试 80 → 81 项全绿。 |
 | `v2.2.4` | 决策台布局按 design-taste 规则改为色阶分区（去细线），并新增命中规则举例（paths/keywords/tools/always 各有中文示例）；按 diagram-design 产出 `jev-data-flow.html`（Data Flow 类型，自定义 JEV 皮肤，self_check 与 geometry 双门通过）并在决策台内嵌同款五段数据流。测试 78 → 80 项全绿。 |

@@ -23,9 +23,67 @@ import { loadConditionalRules } from '../shared/conditional-rules.mjs'
 import { createSubgoalTracker } from '../shared/subgoal-tracker.mjs'
 import { createTelemetryLogger } from '../shared/telemetry.mjs'
 import { createLiveBus } from '../shared/live-bus.mjs'
+import { repairAll } from '../shared/session-log-repair.mjs'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+
+
+// ---------------------------------------------------------------------------
+// Durable event persistence — host plugin-record channel only.
+//
+// The harness session-event vocabulary is CLOSED: writing a new top-level event
+// type through session.append(type, data) makes the entire log unreadable the
+// next time it is opened ("event type ... unknown to this harness and not marked
+// ignorable; refusing to interpret the log"). Live session.append also offers no
+// way to set the envelope's `ignorable` marker. The ONLY supported mechanism for
+// an out-of-tree plugin is appendPluginRecord(session, 'plugin:<ns>/<name>', data),
+// which stamps ignorable:true and keeps the log forward/backward compatible.
+//
+// It is imported lazily and must resolve to the HOST's single module instance:
+// a second copy of the module has its own private #appendRecord and cannot touch
+// host Session instances. We never fall back to session.append for new types —
+// failing open to a no-op only loses the UI card, never the ability to reopen.
+// ---------------------------------------------------------------------------
+let _hostSessionModulePromise = null
+function loadHostSessionModule() {
+  if (_hostSessionModulePromise === null) {
+    _hostSessionModulePromise = (async () => {
+      // A link:-installed preset cannot resolve '@deepseek-ai/*' by Node's normal
+      // package lookup (the host packages live inside app.asar). Try the host's
+      // own asar module path first (same file URL the host loaded => same ESM
+      // module instance, so appendPluginRecord can touch host Session objects),
+      // then fall back to the bare specifier.
+      const candidates = []
+      try {
+        const path = await import('node:path')
+        const url = await import('node:url')
+        const res = typeof process.resourcesPath === 'string' ? process.resourcesPath : ''
+        if (res) {
+          for (const sub of ['app.asar', 'app.asar.unpacked']) {
+            const p = path.join(res, sub, 'dsh', 'node_modules', '@deepseek-ai', 'dsh-session', 'lib', 'index.js')
+            candidates.push(url.pathToFileURL(p).href)
+          }
+        }
+      } catch { /* ignore */ }
+      candidates.push('@deepseek-ai/dsh-session')
+      for (const spec of candidates) {
+        try {
+          const m = await import(spec)
+          if (m && typeof m.appendPluginRecord === 'function') return m
+        } catch { /* try next */ }
+      }
+      return null
+    })()
+  }
+  return _hostSessionModulePromise
+}
+/** Map a legacy `jev/<name>` UI event type onto the plugin-record namespace. */
+function toPluginRecordType(type) {
+  return typeof type === 'string' && type.startsWith('jev/')
+    ? 'plugin:jev-harness/' + type.slice('jev/'.length)
+    : (typeof type === 'string' && type.startsWith('plugin:') ? type : 'plugin:jev-harness/' + type)
+}
 
 export const name = 'jev-harness-loop'
 export const inject = ['tools']
@@ -454,6 +512,9 @@ function createSessionState(sessionId) {
     lastSignature: '',
     frozenDecisionText: '',
     inFlightSubgoals: new Map(),
+    // Per-chunk credited token savings (dedupe so the cumulative "saved" total
+    // never double-counts the same chunk across steps). { saving, counted }
+    savedByChunk: new Map(),
   }
 }
 
@@ -488,6 +549,15 @@ export function apply(ctx, config = {}) {
     writeLegacyMarkdown: config.writeLegacyMarkdown,
     telemetryEnabled: config.telemetryEnabled !== false,
     telemetryLogger: config.telemetryLogger,
+    autoRepairLegacyLogs: config.autoRepairLegacyLogs !== false,
+    autoRepairSkipActiveMs:
+      Number.isInteger(config.autoRepairSkipActiveMs) && config.autoRepairSkipActiveMs >= 0
+        ? config.autoRepairSkipActiveMs
+        : 15000,
+    autoRepairMaxFiles:
+      Number.isInteger(config.autoRepairMaxFiles) && config.autoRepairMaxFiles > 0
+        ? config.autoRepairMaxFiles
+        : 500,
   }
 
   /** @type {Map<string, ReturnType<typeof createSessionState>>} */
@@ -514,17 +584,28 @@ export function apply(ctx, config = {}) {
     ? cfg.telemetryDir
     : join(homedir(), '.dsh', 'jev-decisions')
   function appendJev(session, type, data) {
-    try {
-      if (session && typeof session.append === 'function') {
-        const sid = session.id || session.sessionId || null
-        session.append(type, sid ? Object.assign({}, data, { sessionId: sid }) : data)
-        writeDiag('_ui-append.json', { ok: true, type: type, at: new Date().toISOString() })
+    // Persist as a host plugin record (ignorable:true, 'plugin:' namespace) so a
+    // reopened session never rejects the log. Async + fully fail-open: if the
+    // host module is unavailable we drop the event rather than corrupt history.
+    const pluginType = toPluginRecordType(type)
+    const sid = session && (session.id || session.sessionId)
+    const payload = sid ? Object.assign({}, data, { sessionId: sid }) : data
+    loadHostSessionModule().then((mod) => {
+      if (!mod || typeof mod.appendPluginRecord !== 'function') {
+        writeDiag('_ui-append.json', { ok: false, reason: 'no host appendPluginRecord', type: pluginType })
         return
       }
-      writeDiag('_ui-append.json', { ok: false, reason: 'no session.append', hasSession: !!session, type: type })
-    } catch (e) {
-      writeDiag('_ui-append.json', { ok: false, error: String(e && e.message ? e.message : e), type: type })
-    }
+      const sameInstance = !mod.Session || (session instanceof mod.Session)
+      try {
+        mod.appendPluginRecord(session, pluginType, payload)
+        writeDiag('_ui-append.json', { ok: true, type: pluginType, sameInstance, at: new Date().toISOString() })
+      } catch (e) {
+        // Includes the "wrong module copy" case: nothing is written, log stays intact.
+        writeDiag('_ui-append.json', { ok: false, error: String(e && e.message ? e.message : e), sameInstance, type: pluginType })
+      }
+    }).catch((e) => {
+      writeDiag('_ui-append.json', { ok: false, error: String(e && e.message ? e.message : e), type: pluginType })
+    })
   }
   function writeDiag(name, obj) {
     try {
@@ -885,7 +966,11 @@ export function apply(ctx, config = {}) {
           try { liveBus.push(sessionId, { kind: 'step', turn: state.turns, step: state.steps }) } catch { /* fail-open */ }
         }
       } else if (type === 'turn/start') {
-        state.turns += 1
+        // Prefer the host's authoritative turn index (turn/start carries data.turn).
+        // Incrementing a process-local counter resets to 1 after every restart,
+        // which relabels later turns as turn 1 and makes the UI collapse them.
+        const authoritativeTurn = typeof data.turn === 'number' && Number.isFinite(data.turn) ? data.turn : null
+        state.turns = authoritativeTurn !== null ? authoritativeTurn : state.turns + 1
         if (state.isJev) {
           try {
             liveBus.markJev(sessionId)
@@ -1156,6 +1241,12 @@ export function apply(ctx, config = {}) {
         // the client HUD / turn-tail. Read-only side channel; not in the prompt.
         // Estimate token savings from the visibility ladder (chars compressed
         // away, ~4 chars/token). Best-effort; labeled "估算" in the UI.
+        // Estimate token savings from the visibility ladder (chars compressed
+        // away, ~4 chars/token). Counted with a per-chunk high-water mark so the
+        // SAME chunk is not credited twice across steps: the cumulative "saved"
+        // total is the sum over unique chunks of their best saving (and the
+        // rate denominator counts each chunk's chars once). Best-effort; the UI
+        // labels it "估算".
         let savedTokens = 0
         let ledgerChars = 0
         try {
@@ -1163,10 +1254,20 @@ export function apply(ctx, config = {}) {
           const globalLvl = parsed.context_visibility?.level || 'full'
           for (const c of chunkMeta) {
             const chars = typeof c.chars === 'number' ? c.chars : 0
-            ledgerChars += chars
+            if (chars <= 0) continue
             const lvl = (perChunk[c.id] && perChunk[c.id].level) || globalLvl
             const frac = lvl === 'hide' ? 0 : lvl === 'short_summary' ? 0.15 : lvl === 'long_summary' ? 0.4 : 1
-            savedTokens += (chars * (1 - frac)) / 4
+            const fullSaving = (chars * (1 - frac)) / 4
+            const prev = state.savedByChunk.get(c.id) || { saving: 0, counted: false }
+            if (fullSaving > prev.saving) {
+              savedTokens += fullSaving - prev.saving
+              prev.saving = fullSaving
+            }
+            if (!prev.counted) {
+              ledgerChars += chars
+              prev.counted = true
+            }
+            state.savedByChunk.set(c.id, prev)
           }
         } catch {
           /* estimate is best-effort */
@@ -1440,5 +1541,30 @@ export function apply(ctx, config = {}) {
     })
   } catch {
     /* host may not support agent/disposed; fail-open */
+  }
+
+  // ---------------------------------------------------------------------------
+  // Self-heal: repair legacy session logs carrying bare jev/* events.
+  // Older plugin versions wrote jev/decision|gate|receipt via session.append,
+  // which makes the log unreadable on the next open. Re-tag them to
+  // plugin:jev-harness/* (ignorable:true) so historical sessions open again.
+  // Bounded, background, fail-open, and it skips files still being written.
+  // ---------------------------------------------------------------------------
+  if (cfg.autoRepairLegacyLogs && !process.env.NODE_TEST_CONTEXT && !process.env.JEV_DISABLE_AUTO_REPAIR) {
+    const timer = setTimeout(() => {
+      try {
+        const reports = repairAll({ skipActiveMs: cfg.autoRepairSkipActiveMs, maxFiles: cfg.autoRepairMaxFiles })
+        if (reports.length > 0) {
+          writeDiag('_ui-repair.json', {
+            at: new Date().toISOString(),
+            repaired: reports.filter((r) => r.status === 'repaired').length,
+            reports: reports.slice(0, 25),
+          })
+        }
+      } catch (e) {
+        writeDiag('_ui-repair.json', { ok: false, error: String(e && e.message ? e.message : e), at: new Date().toISOString() })
+      }
+    }, 3000)
+    if (timer && typeof timer.unref === 'function') timer.unref()
   }
 }
