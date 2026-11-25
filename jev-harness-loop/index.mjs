@@ -516,7 +516,8 @@ export function apply(ctx, config = {}) {
   function appendJev(session, type, data) {
     try {
       if (session && typeof session.append === 'function') {
-        session.append(type, data)
+        const sid = session.id || session.sessionId || null
+        session.append(type, sid ? Object.assign({}, data, { sessionId: sid }) : data)
         writeDiag('_ui-append.json', { ok: true, type: type, at: new Date().toISOString() })
         return
       }

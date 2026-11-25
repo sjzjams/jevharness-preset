@@ -22,6 +22,7 @@ window.__ModuleLoader__.load({
     function log() { try { if (typeof console !== 'undefined') console.info.apply(console, ['[JEVHarness]'].concat(Array.prototype.slice.call(arguments))) } catch (e) { /* ignore */ } }
 
     let clientCtx = null
+    let activeSessionId = null
     let stylesInjected = false
     function ensureStyles() {
       if (stylesInjected || typeof document === 'undefined') return
@@ -112,6 +113,58 @@ window.__ModuleLoader__.load({
     function hudSet(s) { hud.latest = s; touchActivity(s); for (const fn of hud.listeners) { try { fn() } catch (e) { /* ignore */ } } }
     function useHud() { const [, f] = React.useState(0); React.useEffect(() => { const fn = () => f((x) => x + 1); hud.listeners.add(fn); return () => { hud.listeners.delete(fn) } }, []); return hud.latest }
 
+    // ---- session-scoped UI gating ----
+    // The four native slots are explicit only in a started JEVHarness session.
+    function sessionIdOf(props) {
+      const p = props || {}
+      if (typeof p.sessionId === 'string' && p.sessionId) return p.sessionId
+      if (p.session && typeof p.session.id === 'string') return p.session.id
+      const binding = p.currentSession || (clientCtx && clientCtx.currentSession)
+      if (binding && typeof binding.getSnapshot === 'function') {
+        const snap = binding.getSnapshot()
+        if (snap && typeof snap.key === 'string' && snap.key) return snap.key
+      }
+      return null
+    }
+    function blankSession(id) {
+      try {
+        const sessions = clientCtx && clientCtx.sessions
+        if (!id || !sessions) return false
+        const list = sessions.list && typeof sessions.list.getSnapshot === 'function' ? sessions.list.getSnapshot() : null
+        const row = list && list.byId && list.byId[id]
+        if (row && row.blank === true) return true
+        if (typeof sessions.scope === 'function') {
+          const scoped = sessions.scope(id)
+          const snap = scoped && scoped.session && typeof scoped.session.getSnapshot === 'function' ? scoped.session.getSnapshot() : null
+          if (snap && snap.blank === true) return true
+        }
+      } catch (e) { /* fail-open: unknown session state is not treated as blank */ }
+      return false
+    }
+    function hasJevState() {
+      const s = hud.latest
+      return !!(s && ((s.decisions && s.decisions.length) || (s.gates && s.gates.length)))
+    }
+    function jevVisible(props) {
+      const id = sessionIdOf(props)
+      if (!id) return !!activeSessionId && hasJevState()
+      if (blankSession(id)) return false
+      if (activeSessionId && activeSessionId !== id) return false
+      return hasJevState()
+    }
+    function noteSession(ev) {
+      const sid = ev && ev.data && ev.data.sessionId
+      if (typeof sid !== 'string' || sid === activeSessionId) return false
+      activeSessionId = sid
+      hud.latest = null
+      settled.snap = null
+      settled.mode = false
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
+      for (const fn of hud.listeners) { try { fn() } catch (e) { /* ignore */ } }
+      for (const fn of settled.listeners) { try { fn() } catch (e) { /* ignore */ } }
+      return true
+    }
+
     // ---- state fold ----
     function initState(ev) {
       const turn = ev.data && typeof ev.data.turn === 'number' ? ev.data.turn : 0
@@ -138,8 +191,8 @@ window.__ModuleLoader__.load({
         }
         return null
       },
-      start: function (_context, match) { const s = initState(match.event); hudSet(s); return s },
-      update: function (context, match) { const s = foldState(context && context.state, match.event); hudSet(s); return s },
+      start: function (_context, match) { noteSession(match.event); const s = initState(match.event); hudSet(s); return s },
+      update: function (context, match) { const reset = noteSession(match.event); const s = reset ? initState(match.event) : foldState(context && context.state, match.event); hudSet(s); return s },
       publication: function () { return 'immediate' },
       // Live state is projected into conversation.input.dock at the bottom of
       // the conversation. The Definition still folds events, but must not anchor
@@ -155,14 +208,16 @@ window.__ModuleLoader__.load({
       target: 'chat',
       match: function (event) {
         if (event && (event.type === 'turn/end' || event.type === 'jev/receipt')) {
+          if (!hasJevState()) return null
           const d = event.data || {}
           const turn = typeof d.turn === 'number' ? d.turn : (typeof event.turn === 'number' ? event.turn : 0)
           return { id: 'r' + turn, role: 'start' }
         }
         return null
       },
-      start: function () { const s = Object.assign({}, hud.latest || { turn: 0, decisions: [], gates: [] }); s.endedAt = Date.now(); settleNow(s); return s },
+      start: function (match) { noteSession(match && match.event); const s = Object.assign({}, hud.latest || { turn: 0, decisions: [], gates: [] }); s.endedAt = Date.now(); settleNow(s); return s },
       update: function (context, match) {
+        noteSession(match && match.event)
         const s = Object.assign({}, hud.latest || (context && context.state) || { turn: 0, decisions: [], gates: [] })
         s.turn = match && match.event && match.event.data && typeof match.event.data.turn === 'number' ? match.event.data.turn : s.turn
         s.endedAt = Date.now()
@@ -230,12 +285,14 @@ window.__ModuleLoader__.load({
 
     function JevReceiptView(props) {
       const s = (props && props.node && props.node.data) || null
+      if (!jevVisible(props)) return null
       return h('div', { className: 'jev-receipt-wrap' }, h(JevCard, { state: s, mode: getMode(), receipt: true }))
     }
-    function JevHud() {
+    function JevHud(props) {
       React.useEffect(() => { ensureStyles() }, [])
       const s = useHud()
       useMode()
+      if (!jevVisible(props)) return null
       if (!s || (!s.decisions.length && !s.gates.length)) return null
       const last = s.decisions.length ? s.decisions[s.decisions.length - 1] : null
       const step = last && typeof last.step === 'number' ? last.step : null
@@ -249,10 +306,11 @@ window.__ModuleLoader__.load({
         lat !== null ? h('span', null, lat + 'ms') : null,
         denies > 0 ? h('span', { className: 'jev-badge-deny' }, ' ⛊ ' + denies) : null)
     }
-    function JevPill() {
+    function JevPill(props) {
       React.useEffect(() => { ensureStyles() }, [])
       const s = useHud()
       const m = useMode()
+      if (!jevVisible(props)) return null
       if (!s || (!s.decisions.length && !s.gates.length)) return null
       return h('button', { type: 'button', className: 'jev-pill', onClick: cycleMode }, h('span', { className: 'jev-dot' }), 'JEV 六维 · ' + MODE_LABEL[m])
     }
@@ -309,6 +367,7 @@ window.__ModuleLoader__.load({
       const useTabInfo = props && props.hooks && props.hooks.tabInfo
       const info = useTabInfo ? useTabInfo() : null
       const s = useHud() || { turn: 0, decisions: [], gates: [], chunkLadder: [], ruleHits: [] }
+      if (!jevVisible(props)) return null
       const decs = s.decisions || []
       const gates = s.gates || []
       const chunks = s.chunkLadder || []
@@ -418,11 +477,12 @@ window.__ModuleLoader__.load({
     // Bottom-of-conversation live projection. conversation.input.dock is a
     // full-width list above the composer, so the card stays visible as the
     // conversation grows; it never scrolls away at the top.
-    function JevLiveDock() {
+    function JevLiveDock(props) {
       React.useEffect(() => { ensureStyles() }, [])
       const live = useHud()
       const st = useSettled()
       const m = useMode()
+      if (!jevVisible(props)) return null
       const receiptMode = st.mode && st.snap && st.snap.decisions && st.snap.decisions.length > 0
       const s = receiptMode ? st.snap : live
       if (!s || (!s.decisions.length && !s.gates.length)) return null

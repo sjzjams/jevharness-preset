@@ -134,3 +134,20 @@ test('ui: governance receipt fires on idle debounce without host turn/end', () =
   assert.match(client, /function useSettled\(\)/)
   assert.match(client, /receipt: !!receiptMode/)
 })
+
+test('ui: four native slots stay hidden outside a started JEV session', () => {
+  assert.match(client, /function jevVisible\(props\)/)
+  assert.match(client, /function blankSession\(id\)/)
+  assert.match(client, /function hasJevState\(\)/)
+  assert.match(client, /function noteSession\(ev\)/)
+  assert.match(client, /function JevLiveDock\(props\)/)
+  assert.match(client, /function JevHud\(props\)/)
+  assert.match(client, /function JevPill\(props\)/)
+  assert.match(client, /function JevReceiptView\(props\)/)
+  assert.match(client, /if \(!hasJevState\(\)\) return null/)
+})
+
+test('host: jev events carry sessionId for UI session gating', () => {
+  assert.match(loop, /const sid = session\.id \|\| session\.sessionId \|\| null/)
+  assert.match(loop, /Object\.assign\(\{\}, data, \{ sessionId: sid \}\)/)
+})

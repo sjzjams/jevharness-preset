@@ -113,6 +113,7 @@ npm run report
   - `sidebar.right.pane.tab` → 右侧专属「JEV 决策台」tab（v2.2.0）。
 - **三种显示模式**：`实时 / 精简 / 演示`，持久化于 `localStorage`，由输入药丸循环切换。
 - **自注册机制**：`package.json` 的 `exports["./client"]` 与 `dsh.client`（`platform=web`，`inject` 含 `@deepseek-ai/dsh-client-ui-sidebar-right`）让 `client.js` 进入浏览器 bundle；`cordis.patch.yml` 末尾 `jevharness-ui` 自插入行让包根 `index.js` 被实例化。`index.js` 写 `~/.dsh/jev-decisions/_ui-root.json` 自检标记。
+- **会话级门控**：四处 UI 槽位只在已开始的 JEVHarness 会话显式显示。`jev/decision` / `jev/gate` / `jev/receipt` 事件携带 `sessionId`；客户端用槽位会话 id、空白会话标记与 JeV 事件态过滤，新建对话或非 JEV 会话不渲染。
 
 ### 3.6 深度决策台（v2.2.0 新增 · H 分期 Phase 3）
 
