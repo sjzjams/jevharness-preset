@@ -11,11 +11,14 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { DEFAULT_TELEMETRY_DIR, summarizeDirectory } from '../shared/telemetry.mjs'
+import { DEFAULT_TELEMETRY_DIR as LEGACY_TELEMETRY_DIR, summarizeDirectory as summarizeTelemetryDirectory } from '../shared/telemetry.mjs'
+import { DEFAULT_SESSIONS_DIR, summarizeSessionsDirectory } from '../shared/session-report.mjs'
 
 export function parseCliArgs(argv = process.argv.slice(2)) {
   const opts = {
-    dir: DEFAULT_TELEMETRY_DIR,
+    sessions: DEFAULT_SESSIONS_DIR,
+    telemetry: LEGACY_TELEMETRY_DIR,
+    source: 'session', // 'session' (durable session logs) | 'telemetry' (legacy LLM-call audit)
     out: null,
     json: false,
     help: false,
@@ -23,10 +26,25 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
-    if (arg === '--dir' && i + 1 < argv.length) {
-      opts.dir = argv[++i]
+    if (arg === '--sessions' && i + 1 < argv.length) {
+      opts.sessions = argv[++i]
+    } else if (arg.startsWith('--sessions=')) {
+      opts.sessions = arg.slice('--sessions='.length)
+    } else if (arg === '--telemetry' && i + 1 < argv.length) {
+      opts.telemetry = argv[++i]
+    } else if (arg.startsWith('--telemetry=')) {
+      opts.telemetry = arg.slice('--telemetry='.length)
+    } else if (arg === '--source' && i + 1 < argv.length) {
+      opts.source = argv[++i] === 'telemetry' ? 'telemetry' : 'session'
+    } else if (arg.startsWith('--source=')) {
+      opts.source = arg.slice('--source='.length) === 'telemetry' ? 'telemetry' : 'session'
+    } else if (arg === '--dir' && i + 1 < argv.length) {
+      // Backward compat: --dir meant the telemetry directory.
+      opts.telemetry = argv[++i]
+      opts.source = 'telemetry'
     } else if (arg.startsWith('--dir=')) {
-      opts.dir = arg.slice('--dir='.length)
+      opts.telemetry = arg.slice('--dir='.length)
+      opts.source = 'telemetry'
     } else if (arg === '--out' && i + 1 < argv.length) {
       opts.out = argv[++i]
     } else if (arg.startsWith('--out=')) {
@@ -85,6 +103,8 @@ export function formatTerminalReport(report) {
     `Latency (avg/p95) : ${s.avgLatencyMs.toFixed(2)} ms / ${s.p95LatencyMs.toFixed(2)} ms`,
     `JeV Tokens        : ${formatNumber(totalTokens)} (in: ${formatNumber(s.totalInputTokens)}, out: ${formatNumber(s.totalOutputTokens)})`,
     `Cache Frozen Rate : ${pct(frozenRate)} (${s.cacheFrozenCount}/${s.totalDecisions}) | Reuse Rate: ${pct(s.cacheReuseRate)}`,
+    `Turns             : ${formatNumber(s.turns ?? 0)}`,
+    `Saved Tokens est. : ${formatNumber(s.savedTokens ?? 0)} (ledger ${formatNumber(s.ledgerChars ?? 0)} chars, ${pct(s.savingRate ?? 0)})`,
     '',
     'Six-Decision Distributions:',
     `  1. context_visibility : ${formatDistInline(s.distributions.visibility)}`,
@@ -107,7 +127,7 @@ export function formatTerminalReport(report) {
     for (const sess of top) {
       const fRate = sess.totalDecisions > 0 ? pct(sess.cacheFrozenCount / sess.totalDecisions) : '0.0%'
       lines.push(
-        `  - ${sess.sessionId} [${sess.format}] steps=${sess.totalDecisions} gates=${sess.totalGateEvents} (deny=${sess.gateCounts.deny}) frozen=${fRate} p95=${sess.p95LatencyMs.toFixed(1)}ms`
+        `  - ${sess.sessionId} [${sess.format}] turns=${sess.turns ?? 0} steps=${sess.totalDecisions} gates=${sess.totalGateEvents} (deny=${sess.gateCounts.deny}) saved=${formatNumber(sess.savedTokens ?? 0)} frozen=${fRate} p95=${sess.p95LatencyMs.toFixed(1)}ms`
       )
     }
   }
@@ -390,6 +410,11 @@ export function renderHtmlDashboard(report, generatedAt = new Date().toISOString
         <div class="kpi-value">${formatNumber(totalTokens)}</div>
         <div class="kpi-sub">In: ${formatNumber(s.totalInputTokens)} &middot; Out: ${formatNumber(s.totalOutputTokens)}</div>
       </div>
+      <div class="kpi">
+        <div class="kpi-label">Turns</div>
+        <div class="kpi-value">${formatNumber(s.turns ?? 0)}</div>
+        <div class="kpi-sub">Saved Tokens est.: ${formatNumber(s.savedTokens ?? 0)} (${pct(s.savingRate ?? 0)})</div>
+      </div>
     </section>
 
     <h2>Six-Decision Distributions</h2>
@@ -463,11 +488,17 @@ export function renderHtmlDashboard(report, generatedAt = new Date().toISOString
 export async function runReportCli(argv = process.argv.slice(2)) {
   const opts = parseCliArgs(argv)
   if (opts.help) {
-    console.log('Usage: node scripts/jev-report.mjs [--dir <path>] [--out <htmlPath>] [--json]')
+    console.log('Usage: node scripts/jev-report.mjs [--sessions <dir>] [--telemetry <dir>] [--source session|telemetry] [--out <htmlPath>] [--json]')
+    console.log('  --sessions  : session-log root (default ~/.dsh/sessions) — the trusted source (decisions/turns/savedTokens)')
+    console.log('  --telemetry : telemetry dir (default ~/.dsh/jev-decisions) — LLM-call audit; supplies real per-call token usage')
+    console.log('  --source    : "session" (default) summarizes session logs; "telemetry" reproduces the legacy behaviour')
     return { exitCode: 0, report: null }
   }
 
-  const report = await summarizeDirectory(opts.dir)
+  const report =
+    opts.source === 'telemetry'
+      ? await summarizeTelemetryDirectory(opts.telemetry)
+      : summarizeSessionsDirectory(opts.sessions, { telemetryDir: opts.telemetry })
 
   if (opts.out) {
     const outPath = resolve(opts.out)

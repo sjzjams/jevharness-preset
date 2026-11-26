@@ -1,4 +1,4 @@
-# JEVHarness 自定义预设（v2.3.0）
+# JEVHarness 自定义预设（v2.3.1）
 
 > 把《JEV ENGINEERING FOR CODING AGENTS》（2026 工作笔记）转化为 DeepSeek Harness 可执行插件架构的 Agent 预设。
 > 通过**按会话严格隔离**的显式类型化状态账本，在每步模型生成前批量向 TypeSafe JeV 询问 Table I 六大决策与 per-chunk 可见性，并由确定性代码执行安全闸门、条件规则挂载、子目标去重/读写锁与异步 JSONL 可观测。
@@ -136,10 +136,9 @@ npm run report
 
 ## 4. 可观测与报表
 
-- 默认异步写入 `~/.dsh/jev-decisions/<safeSessionId>.jsonl`（零同步全量读盘，记录决策、延迟、JeV Token、缓存冻结率、条件规则命中与闸门拦截事件）。
-- `node scripts/jev-report.mjs --out jev-report.html` 可一键生成兼容新旧日志（`.jsonl` + 历史 `.md`）的自包含离线仪表盘。
-
----
+- **报表主数据源 = 会话日志**（`~/.dsh/sessions/**/session.v*.jsonl.zstd`）：决策数、轮数、六维分布、闸门、缓存冻结率、**省 token（按 chunk 去重估算）** 全部从会话事件统计，和卡片/决策台一致。
+- telemetry（`~/.dsh/jev-decisions/<id>.jsonl`）只作为 **LLM 调用审计**，报表从中借用真实每调用 token 用量（复用步不花钱，故 0 计入是对的）。
+- `node scripts/jev-report.mjs` 默认读会话日志；`--sessions <dir>` / `--telemetry <dir>` 可改路径；`--source telemetry` 退回旧版纯 telemetry 统计；`--out jev-report.html` 生成自包含仪表盘，`--json` 输出原始结构。
 
 ## 5. 已知宿主边界（非插件层能力）
 
@@ -227,6 +226,7 @@ npm run report
 
 | 版本 | 说明 |
 |---|---|
+| `v2.3.1` | 报表数据源改为**会话日志**（与卡片/决策台同源）：`jev-report` 现在统计决策数=66（原 telemetry 仅 32，因只记真实 LLM 调用且去重）、轮数、六维分布、闸门、冻结率、省 token（chunk 去重估算）；telemetry 仅提供每调用 token 用量。新增 `shared/session-report.mjs`、`--sessions/--telemetry/--source` 参数，`--dir` 保留为旧 telemetry 兼容。测试 92→94。 |
 | `v2.3.0` | 修复「已是多轮但卡片/决策台仍显示 1 轮」：① 上一版把事件改走 `appendPluginRecord` 后，`import('@deepseek-ai/dsh-session')` 在 link: 安装下解析失败（`_ui-append.json: no host appendPluginRecord`），导致重启后不再写入任何 decision —— 改为优先从 `process.resourcesPath/app.asar/...` 的宿主模块路径导入（同一实例），失败再回退裸包名；② 轮数改取宿主权威 turn 索引（`turn/start.data.turn`），并按 turn/start、turn/end 计轮，某轮无决策也能正确显示；③ 历史日志可用 `repair-logs` 修正被进程内计数器重置写错的 turn 号。测试 90→92 全绿。 |
 | `v2.2.9` | 修复「省 tokens」口径与单位：① `fmtTok()` 增加 M/B 档（≥1000k 不再显示 1000.0k，1.026M 显示 1.03M）；② `savedTokens` 改为**按 chunk 高水位去重**——同一 chunk 跨步只计一次增量，不再每步重复累加。实测旧口径虚高约 12–16 倍（e86f7ea1：0.80M→修正 0.06M；261270eb：1.03M→0.045M）。测试 90 项全绿。 |
 | `v2.2.8` | **彻底修复「重启后会话打不开」反复问题**：根因是 jev-harness-loop 早期用 `session.append('jev/decision'\|'jev/gate'\|'jev/receipt', …)` 写入宿主不认识的新事件类型且未带 `ignorable:true`，宿主读取器 `validateStoredEvents()` 会因此拒绝解释整份日志。改为走宿主唯一支持的 `appendPluginRecord(session, 'plugin:jev-harness/*', data)` 通道（自动 `ignorable:true`）；客户端同时识别新旧两种类型。新增 `shared/session-log-repair.mjs` + `scripts/repair-jev-session-logs.mjs`（`pnpm run repair-logs`），并在插件启动时后台自愈：把历史 `jev/*` 事件无损改标为 `plugin:jev-harness/*`（自动备份、原子替换、跳过在用文件）。测试 87 → 90 项全绿。 |
