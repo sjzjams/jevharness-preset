@@ -132,15 +132,37 @@ window.__ModuleLoader__.load({
       return null
     }
 
-    // ---- cross-turn ledger (all turns, not just the live one) ----
-    // Every jev/decision and jev/gate event folds into a per-turn row, so cards
-    // and the deep console can show cumulative totals and a savings ratio.
-    const turnLedger = new Map()
-    // Highest host turn index observed (from any event carrying data.turn, incl.
-    // turn/start & turn/end). Lets the round count reflect real conversation
-    // turns even when a turn produced no JeV decision event.
+    // ---- cross-turn ledger, STRICTLY per session ----
+    // The card must never mix sessions nor count the same event twice: the host
+    // re-delivers/replays conversation events when it rebuilds a view, so a bare
+    // append-only accumulator double-counts an earlier turn as soon as a new
+    // turn arrives. Each session gets its own turn ledger, its own high-water
+    // turn, and a seen-event set keyed by (sessionId, seq, type).
+    const ledgerBySession = new Map()
+    const maxTurnBySession = new Map()
+    const seenBySession = new Map()
+    let turnLedger = new Map()
     let maxTurnSeen = 0
-    function noteTurn(ev) { const t = ev && ev.data && ev.data.turn; if (typeof t === 'number' && isFinite(t) && t > maxTurnSeen) maxTurnSeen = t }
+    let seenJev = new Set()
+    function ensureSession(sid) {
+      if (!ledgerBySession.has(sid)) ledgerBySession.set(sid, new Map())
+      if (!seenBySession.has(sid)) seenBySession.set(sid, new Set())
+      return sid
+    }
+    function activateSession(sid) {
+      ensureSession(sid)
+      turnLedger = ledgerBySession.get(sid)
+      seenJev = seenBySession.get(sid)
+      maxTurnSeen = maxTurnBySession.get(sid) || 0
+      return turnLedger
+    }
+    function noteTurn(ev) {
+      const t = ev && ev.data && ev.data.turn
+      if (typeof t !== 'number' || !isFinite(t) || t <= maxTurnSeen) return
+      maxTurnSeen = t
+      const sid = (ev && ev.data && ev.data.sessionId) || activeSessionId
+      if (typeof sid === 'string' && sid) maxTurnBySession.set(sid, t)
+    }
     function turnRow(n) {
       const key = typeof n === 'number' ? n : 0
       let r = turnLedger.get(key)
@@ -153,6 +175,19 @@ window.__ModuleLoader__.load({
     function recordJevEvent(ev) {
       try {
         const d = (ev && ev.data) || {}
+        const sid = typeof d.sessionId === 'string' && d.sessionId ? d.sessionId : (activeSessionId || '\u2205')
+        ensureSession(sid)
+        // Dedupe by event identity so replayed/re-rendered events never inflate a
+        // turn's counters; make the target session's ledger active for this row.
+        if (turnLedger !== ledgerBySession.get(sid)) {
+          turnLedger = ledgerBySession.get(sid)
+          seenJev = seenBySession.get(sid)
+          if (!maxTurnSeen && maxTurnBySession.has(sid)) maxTurnSeen = maxTurnBySession.get(sid)
+        }
+        const seen = seenBySession.get(sid)
+        const key = sid + '|' + (ev && ev.seq) + '|' + (ev && ev.type)
+        if (seen.has(key)) return
+        seen.add(key)
         const r = turnRow(typeof d.turn === 'number' ? d.turn : 0)
         if (jevKindOf(ev && ev.type) === 'decision') {
           r.decisions += 1
@@ -231,19 +266,20 @@ window.__ModuleLoader__.load({
       return hasJevState()
     }
     function noteSession(ev) {
-      noteTurn(ev)
       const sid = ev && ev.data && ev.data.sessionId
-      if (typeof sid !== 'string' || sid === activeSessionId) return false
-      activeSessionId = sid
-      maxTurnSeen = 0
-      turnLedger.clear()
-      hud.latest = null
-      settled.snap = null
-      settled.mode = false
-      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
-      for (const fn of hud.listeners) { try { fn() } catch (e) { /* ignore */ } }
-      for (const fn of settled.listeners) { try { fn() } catch (e) { /* ignore */ } }
-      return true
+      const switched = typeof sid === 'string' && sid !== activeSessionId
+      if (switched) {
+        activeSessionId = sid
+        activateSession(sid)   // point at THIS session's ledger; never clear others
+        hud.latest = null
+        settled.snap = null
+        settled.mode = false
+        if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
+        for (const fn of hud.listeners) { try { fn() } catch (e) { /* ignore */ } }
+        for (const fn of settled.listeners) { try { fn() } catch (e) { /* ignore */ } }
+      }
+      noteTurn(ev)
+      return switched
     }
 
     // ---- state fold ----

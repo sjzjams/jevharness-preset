@@ -14,3 +14,11 @@ jev-residuals-fixes.html
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Local debug scratch (never commit)
+_compare_draft.md
+_jevlog1.jsonl
+_log_jev.json
+_log_jev.jsonl
+_log_ptc.json
+_metrics_turn1.json

@@ -150,13 +150,13 @@ test('ui: four native slots stay hidden outside a started JEV session', () => {
 
 test('ui: all-turn ledger accumulates decisions, gates and savings', () => {
   for (const literal of [
-    'const turnLedger = new Map()',
+    'let turnLedger = new Map()',
     'function recordJevEvent(ev)',
     'function savingRate(tokens, chars)',
     'function turnRows()',
     'function ledgerTotals()',
     'function enrichState(s)',
-    'turnLedger.clear()',
+    'activateSession(sid)',
     'recordJevEvent(match.event)',
     'hud.latest = enrichState(s)',
   ]) assert.ok(client.includes(literal), 'missing: ' + literal)
@@ -187,4 +187,13 @@ test('host: jev events are persisted as host plugin records (log stays loadable)
   assert.match(loop, /appendPluginRecord\(session, pluginType, payload\)/)
   assert.match(loop, /'plugin:jev-harness\/'/)
   assert.match(loop, /function toPluginRecordType\(type\)/)
+})
+
+test('ui: card ledger is per-session and idempotent (no turn-1 inflation)', () => {
+  // Regression: a single global ledger with no event dedupe double-counted an
+  // earlier turn every time the host re-delivered history for a new turn.
+  assert.match(client, /const ledgerBySession = new Map\(\)/)
+  assert.match(client, /const seenBySession = new Map\(\)/)
+  assert.match(client, /seen\.has\(key\)/)
+  assert.match(client, /activateSession\(sid\)/)
 })

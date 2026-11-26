@@ -146,6 +146,49 @@ export function normalizeTurns(records) {
   return { records: out, changed }
 }
 
+/**
+ * Recompute per-step savedTokens / ledgerChars with the current (deduped,
+ * high-water) definition, so historical logs written under the old definition
+ * stop showing inflated savings in the UI. Replays each decision's own
+ * chunkLadder (id/chars/visibility); idempotent.
+ */
+export function recomputeSavings(records) {
+  const hw = new Map()
+  let changed = 0
+  const out = []
+  for (const line of records) {
+    let o
+    try { o = JSON.parse(line) } catch { out.push(line); continue }
+    const isDecision = o && typeof o.type === 'string' && /(^jev\/|^plugin:jev-harness\/)decision$/.test(o.type)
+    if (isDecision && o.data && Array.isArray(o.data.chunkLadder)) {
+      let delta = 0
+      let newChars = 0
+      for (const e of o.data.chunkLadder) {
+        if (!e || e.id === undefined || e.id === null) continue
+        const chars = typeof e.chars === 'number' ? e.chars : 0
+        if (chars <= 0) continue
+        const lvl = e.visibility || e.level || 'full'
+        const frac = lvl === 'hide' ? 0 : lvl === 'short_summary' ? 0.15 : lvl === 'long_summary' ? 0.4 : 1
+        const svv = (chars * (1 - frac)) / 4
+        const prev = hw.get(e.id) || { saving: 0, counted: false }
+        if (svv > prev.saving) { delta += svv - prev.saving; prev.saving = svv }
+        if (!prev.counted) { newChars += chars; prev.counted = true }
+        hw.set(e.id, prev)
+      }
+      const ns = Math.round(delta)
+      if (o.data.savedTokens !== ns || o.data.ledgerChars !== newChars) {
+        o.data.savedTokens = ns
+        o.data.ledgerChars = newChars
+        changed++
+        out.push(JSON.stringify(o))
+        continue
+      }
+    }
+    out.push(line)
+  }
+  return { records: out, changed }
+}
+
 /** Re-encode records as header frame + one record-batch frame. */
 export function encodeRecords(records) {
   if (records.length === 0) throw new Error('cannot encode an empty session log')
@@ -174,17 +217,21 @@ export function repairFile(file, options = {}) {
   if (info.bad > 0) { report.reason = info.bad + ' unparsable record(s)'; return report }
   const t = transformText(decoded.text)   // retag bare jev/* -> plugin:jev-harness/*
   const nz = normalizeTurns(t.records)     // relabel stuck turn numbers from turn/start boundaries
+  const sv = recomputeSavings(nz.records)  // recompute savedTokens/ledgerChars (deduped definition)
   report.retagged = t.changed
   report.returned = nz.changed
-  report.changed = t.changed + nz.changed
+  report.savings = sv.changed
+  report.changed = t.changed + nz.changed + sv.changed
   if (report.changed === 0) { report.status = 'clean'; return report }
   if (dryRun) { report.status = 'would-repair'; return report }
-  const next = encodeRecords(nz.records)
+  const next = encodeRecords(sv.records)
   const nextText = decodeAllFrames(next).text
   const check = analyzeText(nextText)
-  const checkTurn = normalizeTurns(nextText.split('\n').filter((l) => l.length > 0)).changed
-  if (check.jev !== 0 || check.bad !== 0 || check.records !== info.records || checkTurn !== 0) {
-    report.reason = 'self-verification failed (jev=' + check.jev + ', bad=' + check.bad + ', records=' + check.records + ', turn=' + checkTurn + ')'
+  const lines = nextText.split('\n').filter((l) => l.length > 0)
+  const checkTurn = normalizeTurns(lines).changed
+  const checkSavings = recomputeSavings(lines).changed
+  if (check.jev !== 0 || check.bad !== 0 || check.records !== info.records || checkTurn !== 0 || checkSavings !== 0) {
+    report.reason = 'self-verification failed (jev=' + check.jev + ', bad=' + check.bad + ', records=' + check.records + ', turn=' + checkTurn + ', savings=' + checkSavings + ')'
     return report
   }
   const backup = file + '.bak-jevrepair-' + new Date(now).toISOString().replace(/[:.]/g, '-')
