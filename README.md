@@ -1,11 +1,11 @@
-# JEVHarness 自定义预设（v2.3.3）
+# JEVHarness 自定义预设（v2.3.5）
 
 > 把《JEV ENGINEERING FOR CODING AGENTS》（2026 工作笔记）转化为 DeepSeek Harness 可执行插件架构的 Agent 预设。
 > 通过**按会话严格隔离**的显式类型化状态账本，在每步模型生成前批量向 TypeSafe JeV 询问 Table I 六大决策与 per-chunk 可见性，并由确定性代码执行安全闸门、条件规则挂载、子目标去重/读写锁与异步 JSONL 可观测。
 
 - 声明 id：`jevharness`
 - 显示名：`JEVHarness`
-- Bundle：`@local/dsh-jevharness-preset`（`v2.2.7`）
+- Bundle：`@local/dsh-jevharness-preset`（`v2.3.5`）
 - 基础：官方 `ptc` 预设 + 零外部依赖纯 Node 20+ ESM 插件层
 - 依据：《JEV ENGINEERING FOR CODING AGENTS》（Diogo Almeida / TypeSafe 设计笔记综合版）
 
@@ -18,7 +18,7 @@ jevharness-preset/
 ├─ package.json                  # v2.1.0 bundle 清单（含 ./client 导出 + dsh.client）与 test / bench / report 脚本
 ├─ cordis.patch.yml              # 预设声明、v2 persona 契约、循环/工具配置与 jevharness-ui 客户端自注册行
 ├─ index.js                      # 客户端 bundle 宿主半边（自注册行加载标记 _ui-root.json）
-├─ client.js                     # 浏览器端实时 UI：JEV Live HUD / 显示模式 pill / 回合回执卡
+├─ client.js                     # 浏览器端 UI：顶栏常驻 HUD（JEV v2.3.5），点击弹出终端风悬浮回执窗
 ├─ shared/
 │  ├─ gateway.mjs                # 共享 Magpie System One 网关客户端与 .env Key mtime 缓存
 │  ├─ answers.mjs                # Table I 题型构造、双峰尾风险解析、置信度分桶与旧格式兼容
@@ -38,7 +38,7 @@ jevharness-preset/
 │  └─ jev-report.mjs             # 本地观测报表 CLI + 静态 HTML 仪表盘生成器
 ├─ bench/
 │  └─ suite.mjs                  # 4 类标准化离线回归基准套件
-└─ test/                         # 81 项原生 node:test 单元测试与端到端集成测试（含 live-bus / phase3 / UI 放置 / 完整决策步流 / 回执 / 决策台数据流）
+└─ test/                         # 91 项原生 node:test 测试（含 live-bus / phase3 / 单 HUD 入口 / 悬浮回执 / 会话账本）
 ```
 
 ---
@@ -101,26 +101,26 @@ npm run report
 - **子目标去重与读写锁（§VI）**：`subagent` 派发前通过中英文 Jaccard 相似度拦截重复任务，并按路径执行读-读并发放行、写-写与读写冲突拦截；工具报错/完成事件丢失时释放子目标锁，陈旧 `in_flight` 自动过期，避免自锁。
 - **门控报错不回灌**：`session/event` 的 `tool/result` 分支会跳过 `Error: JEVHarness blocked…` / `Error: JeV permissions=…` 这类门控拒绝结果，不再把它们作为业务 chunk 回喂给 JeV 放大负面偏置；门控事件仍单独写入 JSONL gate 日志。
 
-### 3.5 实时 Web UI 投影（v2.1.0 新增，v2.2.0 扩展）
+### 3.5 实时 Web UI 投影（v2.1.0 新增，v2.3.5 收敛为单入口）
 
 - **零成本旁路**：`jev-harness-loop` 把同一份每步决策（六维行、延迟、缓存冻结、拦截、估算省下 token、Chunk 阶梯、规则命中）写入 `shared/live-bus.mjs` 内存环形缓冲（每会话最多 400 事件、120s 活跃 TTL），并向宿主会话追加 log-only 事件 `jev/decision` / `jev/gate`；**只走 UI 旁路、不进模型 prompt，KV Cache 前缀完全不受影响**，全部 fail-open。
 - **跨进程通道**：桌面 Web 下自建 `/api` 与 `connection.rpc` 频道均不可达（405/404，见决策记录 `dbc70c44` / `7a1c00fb`）。正解是宿主 `session.append` 只读日志事件 + 客户端 `ctx.uiConversation.events.register` 注册 Conversation Node：事件随会话流下发、可回放、跨会话持久化。
-- **四处 UI 槽位**（不侵入宿主既有布局）：
-  - `conversation.input.dock` → 「JEV 实时介入」常驻条，贴在对话区最下面（composer 上方），随对话增长始终可见；
-  - `conversation.chat.node` → 仅在 `turn/end` 后渲染「✅ JEV 治理回执」卡（六维行、拦截盾牌、KV 复用率与省约 token 估算），锚点在流尾不再跑到顶部；
-  - `conversation.session.header.utilities` → 呼吸灯「JEV Live」HUD（步号 / 拦截计数），点击打开右侧深度决策台；
-  - `conversation.input.left` → 「JEV 六维」显示模式 pill（点击循环 live / compact / showcase）；
-  - `sidebar.right.pane.tab` → 右侧专属「JEV 决策台」tab（v2.2.0）。
-- **三种显示模式**：`实时 / 精简 / 演示`，持久化于 `localStorage`，由输入药丸循环切换。
-- **自注册机制**：`package.json` 的 `exports["./client"]` 与 `dsh.client`（`platform=web`，`inject` 含 `@deepseek-ai/dsh-client-ui-sidebar-right`）让 `client.js` 进入浏览器 bundle；`cordis.patch.yml` 末尾 `jevharness-ui` 自插入行让包根 `index.js` 被实例化。`index.js` 写 `~/.dsh/jev-decisions/_ui-root.json` 自检标记。
-- **会话级门控**：四处 UI 槽位只在已开始的 JEVHarness 会话显式显示。`jev/decision` / `jev/gate` / `jev/receipt` 事件携带 `sessionId`；客户端用槽位会话 id、空白会话标记与 JeV 事件态过滤，新建对话或非 JEV 会话不渲染。
-- **全轮次汇总**：客户端按会话维护逐轮账本（决策数 / 拦截数 / KV 复用 / 估算省 token）；实时卡与回执卡显示每轮一行 + 全会话合计，深度决策台新增「逐轮汇总」分区，并给出节省比例（省下 token ÷ 可见性阶梯理论全量 token），切换会话即清空重算。
+- **单一 UI 槽位**（不侵入宿主既有布局）：
+  - `conversation.session.header.utilities` → 常驻顶栏 HUD「JEV v2.3.5」（步号 / 延迟 / 拦截计数），点击弹出悬浮回执窗；
+  - 悬浮回执窗挂载到 `document.body`，避开顶栏裁剪；含六宫格指标、KV 复用仪表、逐轮节省曲线、拦截告警与逐轮账本；
+  - 支持点外部、Esc、关闭按钮收起；提供「复制回执」按钮；
+  - 已移除输入药丸、底部常驻卡、流尾回执卡与右侧决策台四个槽位；
 
-### 3.6 深度决策台（v2.2.0 新增 · H 分期 Phase 3）
+- **版本标记**：HUD 标签直接显示 `JEV v2.3.5`，用于确认浏览器已加载新客户端。
+- **自注册机制**：`package.json` 的 `exports["./client"]` 与 `dsh.client`（`platform=web`，仅注入 conversation / chat）让 `client.js` 进入浏览器 bundle；`cordis.patch.yml` 末尾 `jevharness-ui` 自插入行让包根 `index.js` 被实例化。`index.js` 写 `~/.dsh/jev-decisions/_ui-root.json` 自检标记。
+- **会话级门控**：HUD 常驻显示；空白会话与非 JEV 会话不渲染。`jev/decision` / `jev/gate` / `jev/receipt` 事件携带 `sessionId`，客户端按会话隔离账本。
+- **全轮次汇总**：客户端按会话维护逐轮账本（决策数 / 拦截数 / KV 复用 / 估算省 token）；悬浮回执显示每轮一行 + 全会话合计，并给出节省比例（省下 token ÷ 可见性阶梯理论全量 token），切换会话即清空重算。
 
-- **右侧面板**：按官方两段式契约注册——`ctx.sidebarRightTabs.register({ id: '@local/dsh-jevharness-preset/sidebar', kind: 'jev-harness-decisions', keepMounted: true, guide })` + `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: id }, Body)`；引导页提供「JEV 决策台」入口胶囊，顶栏 HUD 点击直接 `openTab(kind)` 打开。
-- **Chunk 可见性阶梯**：每步把 `chunkStore.listMetadata` 的紧凑投影（id / kind / source / sensitivity / visibility / chars / lines，**不含 chunk 原文**）随 `jev/decision` 下发，面板按 `hide / short_summary / long_summary / full` 四档绘制分段条、计数与逐 chunk 列表。
-- **条件规则命中列表**：同事件携带本步实际挂载的 `FOOTGUNS.md` / `.jev/rules/*.md` 命中（id / name / source / reason），面板列出规则名、来源与命中原因；无命中时显示空态。
+### 3.6 悬浮回执窗（v2.3.5 收敛自深度决策台）
+
+- **挂载方式**：点击 HUD 后由 `mountReceipt()` 把回执 DOM 追加到 `document.body`，不依赖顶栏内 `position:fixed`；`unmountReceipt()` 负责清理。
+- **终端风视觉**：深色底 + 荧光绿 / 琥珀 / 红色告警、条码头、扫描线、六宫格、KV 复用仪表、逐轮节省曲线；数值全部来自会话账本。
+- **拦截告警**：有 deny 闸门时显示 `POLICY · DENIED`、次数与规则；无拦截显示 `ALL CLEAR · 无拦截`。
 - **零 prompt 成本**：以上字段只进 UI 旁路事件，不进 `system-prompt/assemble`，不破坏冻结的 KV Cache 前缀。
 
 ---
@@ -216,7 +216,7 @@ npm run report
 | 条件规则 | 每步重挂 `FOOTGUNS.md` / `.jev/rules/*`，天然免疫 compaction |
 | 并发治理 | 子目标去重 + 路径读写锁，防重复派发与写冲突 |
 | 隔离与健壮 | 严格多会话隔离；门控报错不回灌，避免负面反馈自锁 |
-| 实时可见 | 每步决策旁路投影到 HUD / 回执卡 / 深度决策台，不进模型 prompt |
+| 实时可见 | 每步决策旁路投影到顶栏 HUD 与悬浮回执窗，不进模型 prompt |
 
 **代价与边界**：每步一次 JeV 决策有固定开销（实测 6 次合计 4.17 s、13,468 tokens，新鲜输入略高）。小任务上收益主要来自少步数批量化；审计、闸门、账本这些结构优势在只读小任务里用不上。多步长链路、追责复盘、秘密或外部网络操作才真正拉开差距。一句话：**它买的不是"更快"，是"可控、可查、可回退"**。
 
@@ -226,6 +226,8 @@ npm run report
 
 | 版本 | 说明 |
 |---|---|
+| `v2.3.5` | UI 收敛为单入口：只保留顶栏常驻 HUD「JEV v2.3.5」，点击弹出终端风悬浮回执窗（深色底 / 荧光绿 / 琥珀 / 红色告警、条码头、六宫格、KV 仪表、逐轮曲线、拦截告警）。弹窗挂到 `document.body`，避开顶栏裁剪；移除输入药丸、底部常驻卡、流尾回执卡、右侧决策台及 sidebar-right 注入。修复 `fmtTok` 先读后初始化导致回执构建抛错、弹框不显示的 TDZ 缺陷。测试 90 → 91 项全绿。 |
+| `v2.3.4` | 悬浮回执改挂 `document.body`；HUD 增加可见版本号用于确认客户端已加载；HUD 去掉事件态门槛，重启后常驻。 |
 | `v2.3.3` | 修复「第 1 轮统计在新一轮发生变化」：卡片账本改为**严格按会话隔离**（`ledgerBySession` + 每会话高水位 turn），并按 **(sessionId,seq,type) 事件去重**（`seenBySession`），宿主在新轮重建视图重放历史事件时不再重复累加。旧实现是单一全局 `turnLedger` 无去重，重放 x2/x3 会把第 1 轮 12 决策/7,570 放大成 24/15,140、36/22,710。测试 96→97。 |
 | `v2.3.2` | UI 历史数据回算：`session-log-repair` 新增 `recomputeSavings()`，按当前「chunk 高水位去重」口径重算历史 `jev/decision` 的 `savedTokens/ledgerChars`（用事件自带 `chunkLadder` 回放；幂等、自校验）。已修复 4 个旧会话的虚高值（如 e86f7ea1 0.80M→0.061M、261270eb 1.03M→0.49M）。无 `chunkLadder` 的更旧会话无法回算，保持原值。启动自愈会自动执行。测试 94→96。 |
 | `v2.3.1` | 报表数据源改为**会话日志**（与卡片/决策台同源）：`jev-report` 现在统计决策数=66（原 telemetry 仅 32，因只记真实 LLM 调用且去重）、轮数、六维分布、闸门、冻结率、省 token（chunk 去重估算）；telemetry 仅提供每调用 token 用量。新增 `shared/session-report.mjs`、`--sessions/--telemetry/--source` 参数，`--dir` 保留为旧 telemetry 兼容。测试 92→94。 |
