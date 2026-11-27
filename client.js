@@ -1,11 +1,10 @@
 /**
- * JEVHarness client module — Conversation Node extension (official path).
+ * JEVHarness client module — single top-bar HUD with a floating governance receipt.
  *
- * Host writes durable log-only session events ('jev/decision', 'jev/gate').
- * This module registers a Conversation Node Definition that folds those events
- * into one node per turn and renders it inline in the chat, plus a header HUD,
- * an input pill and a right-sidebar deep-decision tab (chunk ladder + rule hits).
- * No custom /api or rpc transport.
+ * The host writes durable log-only session events ('jev/decision', 'jev/gate').
+ * One node Definition folds them into per-turn state; a header HUD shows live
+ * metrics. Clicking the HUD opens a floating terminal-style receipt window.
+ * No inline cards, no input pill, no sidebar tab, no custom /api transport.
  */
 window.__ModuleLoader__.load({
   id: '@local/dsh-jevharness-preset',
@@ -13,11 +12,6 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
     const KIND = 'jev-harness'
-    const SIDEBAR_ID = '@local/dsh-jevharness-preset/sidebar'
-    const SIDEBAR_KIND = 'jev-harness-decisions'
-    const MODE_KEY = 'jev-harness.displayMode'
-    const MODES = ['live', 'compact', 'showcase']
-    const MODE_LABEL = { live: '实时', compact: '精简', showcase: '演示' }
 
     function log() { try { if (typeof console !== 'undefined') console.info.apply(console, ['[JEVHarness]'].concat(Array.prototype.slice.call(arguments))) } catch (e) { /* ignore */ } }
 
@@ -28,59 +22,42 @@ window.__ModuleLoader__.load({
       if (stylesInjected || typeof document === 'undefined') return
       stylesInjected = true
       const css = [
-        '@keyframes jevPulse{0%{opacity:.35;transform:scale(.82)}50%{opacity:1;transform:scale(1)}100%{opacity:.35;transform:scale(.82)}}',
-        '.jev-hud{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:12px;border:1px solid rgba(124,92,255,.45);background:linear-gradient(180deg,rgba(124,92,255,.16),rgba(124,92,255,.06));color:#cdbfff;font:600 11px/1 ui-monospace,Consolas,monospace;cursor:pointer;user-select:none}',
-        '.jev-dot{width:7px;height:7px;border-radius:50%;background:#7c5cff;box-shadow:0 0 8px #7c5cff;animation:jevPulse 1.4s ease-in-out infinite}',
-        '.jev-sep{opacity:.4}.jev-badge-deny{color:#f85149;font-weight:700}',
-        '.jev-pill{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;margin-right:8px;border-radius:13px;border:1px solid rgba(124,92,255,.4);background:rgba(124,92,255,.1);color:#cdbfff;font:600 11px/1 ui-monospace,Consolas,monospace;cursor:pointer}',
-        '.jev-card{margin:8px auto;max-width:640px;max-height:220px;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(124,92,255,.28);border-radius:10px;background:var(--dsw-alias-bg-elevated,#171c23);font-size:12px}',
-        '.jev-card-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:linear-gradient(90deg,rgba(124,92,255,.18),transparent);flex-wrap:wrap;flex:0 0 auto}',
-        '.jev-card-title{font-weight:700;color:#cdbfff;font-size:12px}',
-        '.jev-card-sub{color:var(--dsw-alias-fg-secondary,#a9b4c0);font-size:11px}',
-        '.jev-row{display:flex;align-items:center;gap:6px;padding:4px 12px;font-family:ui-monospace,Consolas,monospace;color:var(--dsw-alias-fg-secondary,#a9b4c0);flex-wrap:wrap}',
-        '.jev-row b{color:var(--dsw-alias-fg,#e8edf3);font-weight:600}',
-        '.jev-tag{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:600}',
-        '.jev-tag-deny{background:rgba(248,81,73,.16);color:#f85149}',
-        '.jev-tag-ask{background:rgba(210,153,34,.16);color:#d29922}',
-        '.jev-tag-ok{background:rgba(63,185,80,.14);color:#3fb950}',
-        '.jev-card-body{flex:1 1 auto;min-height:0;overflow-y:auto}',
-        '.jev-kv{display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px 10px;flex:0 0 auto}',
-        '.jev-kv span{background:rgba(124,92,255,.1);border:1px solid rgba(124,92,255,.22);border-radius:6px;padding:2px 7px;font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:#cdbfff}',
-        '.jev-shield{display:flex;align-items:center;gap:8px;margin:6px 10px;padding:7px 10px;border-radius:8px;border:1px solid rgba(248,81,73,.5);background:linear-gradient(90deg,rgba(248,81,73,.22),rgba(248,81,73,.05));color:#ffb3ad;font-size:12px;font-weight:600;flex-wrap:wrap}',
-        '.jev-shield-ic{font-size:15px;filter:drop-shadow(0 0 4px rgba(248,81,73,.6))}',
-        '.jev-metric{display:inline-flex;padding:1px 7px;border-radius:6px;background:rgba(63,185,80,.12);color:#7ee787;font-size:10.5px;font-weight:600;font-family:ui-monospace,Consolas,monospace}',
-        '.jev-brand{margin-top:2px;padding:5px 10px;border-top:1px dashed rgba(124,92,255,.3);color:#cdbfff;font:600 10.5px/1.4 ui-monospace,Consolas,monospace;opacity:.9}',
-        '.jev-deep-card{display:block;max-height:none;overflow:visible}',
-        '.jev-deep-title{padding:9px 12px 2px;font-weight:700;color:#cdbfff}',
-        '.jev-deep-head{display:flex;align-items:center;gap:8px;padding-bottom:10px;border-bottom:1px solid rgba(124,92,255,.25);font-weight:700;color:#cdbfff;flex-wrap:wrap}',
-        '.jev-deep-sec{margin-top:10px;padding:10px 12px;border-radius:6px;background:rgba(124,92,255,.05)}',
-        '.jev-rule-example{margin-top:4px;font-size:10.5px;color:#7ee787}',
-        '.jev-flow{margin-top:10px;padding:10px 12px;border-radius:6px;background:rgba(124,92,255,.05)}',
-        '.jev-flow svg{width:100%;height:auto;display:block}',
-        '.jev-stream{max-height:180px;overflow-y:auto;margin-top:6px}',
-        '.jev-deep-sec h4{margin:0 0 8px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dsw-alias-fg-secondary,#a9b4c0)}',
-        '.jev-ladder{display:flex;gap:3px;height:14px;border-radius:6px;overflow:hidden;background:rgba(124,92,255,.08)}',
-        '.jev-ladder-seg{display:inline-flex;align-items:center;justify-content:center;min-width:18px;font:700 9px/1 ui-monospace,Consolas,monospace;color:#0d1117}',
-        '.jev-lvl-hide{background:#6e7681}.jev-lvl-short{background:#d29922}.jev-lvl-long{background:#58a6ff}.jev-lvl-full{background:#3fb950}',
-        '.jev-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:7px;font-size:10.5px;color:var(--dsw-alias-fg-secondary,#a9b4c0)}',
-        '.jev-legend-item{display:inline-flex;align-items:center;gap:4px}',
-        '.jev-swatch{display:inline-block;width:8px;height:8px;border-radius:2px}',
-        '.jev-chunks{margin-top:8px;display:flex;flex-direction:column;gap:4px}',
-        '.jev-chunk{display:flex;align-items:center;gap:7px;padding:5px 8px;border:1px solid rgba(124,92,255,.18);border-radius:6px;background:rgba(124,92,255,.05);flex-wrap:wrap}',
-        '.jev-chunk-src{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-fg-secondary,#a9b4c0);font-size:10.5px}',
-        '.jev-rules{margin-top:8px;display:flex;flex-direction:column;gap:6px}',
-        '.jev-rule{padding:7px 9px;border-left:2px solid #d29922;border-radius:4px;background:rgba(210,153,34,.07);display:flex;flex-direction:column;gap:3px}',
-        '.jev-rule-reason{font-size:10.5px;color:var(--dsw-alias-fg-secondary,#a9b4c0)}',
-        '.jev-empty{padding:10px;border:1px dashed rgba(124,92,255,.22);border-radius:6px;color:var(--dsw-alias-fg-secondary,#a9b4c0);font-size:11px}',
-        '.jev-dock{width:100%;margin:0 0 6px;display:flex;justify-content:center}',
-        '.jev-dock-sticky{position:sticky;bottom:0;z-index:6;backdrop-filter:blur(6px)}',
-        '.jev-dock-sub{color:var(--dsw-alias-fg-secondary,#a9b4c0);font-weight:500}',
-        '.jev-receipt-wrap{margin:8px 0}',
-        '.jev-turns{margin:6px 12px;display:flex;flex-direction:column;gap:3px}',
-        '.jev-turn-row{display:flex;align-items:center;gap:6px;padding:4px 7px;border-radius:6px;background:rgba(124,92,255,.08);border:1px solid rgba(124,92,255,.18);font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--dsw-alias-fg-secondary,#a9b4c0);flex-wrap:wrap}',
-        '.jev-turn-row b{color:var(--dsw-alias-fg,#e8edf3);font-weight:600}',
-        '.jev-turn-label{color:#cdbfff;font-weight:700;min-width:46px}',
-        '.jev-rate{color:#7ee787;font-weight:700}',
+        '@keyframes jevPulse{0%{opacity:.35;transform:scale(.8)}50%{opacity:1;transform:scale(1)}100%{opacity:.35;transform:scale(.8)}}',
+        '@keyframes jevBlink{0%,100%{opacity:1}50%{opacity:.35}}',
+        '.jev-hud-wrap{position:relative;display:inline-flex;align-items:center}',
+        '.jev-hud{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border:1px solid #9dbf3c;border-radius:2px;background:#0b0e0b;color:#d6f75a;font:700 11px/1 ui-monospace,Consolas,monospace;letter-spacing:.08em;cursor:pointer;user-select:none;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,6px 100%,0 calc(100% - 6px))}',
+        '.jev-hud:hover{background:#141a10;box-shadow:0 0 12px rgba(214,247,90,.35)}',
+        '.jev-dot{width:7px;height:7px;border-radius:50%;background:#d6f75a;box-shadow:0 0 8px #d6f75a;animation:jevPulse 1.4s ease-in-out infinite;flex:0 0 auto}',
+        '.jev-sep{color:#5d6b52}.jev-badge-deny{color:#ff5a4d;font-weight:700}',
+        '.jev-pop{position:fixed;width:420px;max-width:calc(100vw - 24px);max-height:min(78vh,720px);overflow:auto;z-index:2147483000;box-sizing:border-box;color:#cfe0bd;background:repeating-linear-gradient(0deg,rgba(214,247,90,.028) 0 1px,transparent 1px 3px),#090c0a;border:1px solid #9dbf3c;box-shadow:0 18px 60px rgba(0,0,0,.75),0 0 0 1px rgba(214,247,90,.12),0 0 26px rgba(214,247,90,.12);font:12px/1.5 ui-monospace,Consolas,monospace;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px))}',
+        '.jev-pop::before{content:"";position:absolute;inset:5px;border:1px solid rgba(214,247,90,.18);pointer-events:none}',
+        '.jev-pop-head{display:flex;align-items:center;gap:8px;padding:10px 12px;background:linear-gradient(90deg,rgba(214,247,90,.12),rgba(214,247,90,.02));border-bottom:1px solid rgba(214,247,90,.32)}',
+        '.jev-pop-title{font-weight:800;letter-spacing:.14em;color:#d6f75a;white-space:nowrap}',
+        '.jev-barcode{flex:1;height:20px;min-width:20px;opacity:.65;background:repeating-linear-gradient(90deg,#d6f75a 0 1px,transparent 1px 3px,#d6f75a 3px 4px,transparent 4px 7px,#d6f75a 7px 9px,transparent 9px 12px)}',
+        '.jev-live{padding:2px 6px;border:1px solid #d6f75a;background:#d6f75a;color:#0b0e0b;font-weight:800;font-size:10px;letter-spacing:.12em;animation:jevBlink 2s ease-in-out infinite}',
+        '.jev-pop-body{padding:10px 12px 12px}',
+        '.jev-tiles{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid rgba(214,247,90,.22);margin-bottom:10px}',
+        '.jev-tile{min-height:54px;padding:6px 8px;border-right:1px solid rgba(214,247,90,.18);border-bottom:1px solid rgba(214,247,90,.18);display:flex;flex-direction:column;gap:3px}',
+        '.jev-tile:nth-child(3n){border-right:0}.jev-tile:nth-last-child(-n+3){border-bottom:0}',
+        '.jev-tile-label{font-size:9px;letter-spacing:.16em;color:#7f906f;text-transform:uppercase}',
+        '.jev-tile-value{font-size:16px;font-weight:800;color:#d6f75a;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+        '.jev-tile-value.amber{color:#ffb000}.jev-tile-value.red{color:#ff5a4d}',
+        '.jev-instrument{display:flex;gap:10px;align-items:stretch;margin-bottom:10px}',
+        '.jev-gauge-box{flex:0 0 132px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(214,247,90,.22);background:rgba(214,247,90,.04)}',
+        '.jev-chart-box{flex:1;min-width:0;border:1px solid rgba(214,247,90,.22);background:rgba(214,247,90,.04);padding:4px 6px}',
+        '.jev-box-label{font-size:9px;letter-spacing:.14em;color:#7f906f;margin-bottom:2px}',
+        '.jev-alert{padding:8px 10px;margin-bottom:10px;border:1px dashed #ff5a4d;background:rgba(255,74,51,.08);color:#ff8b80}',
+        '.jev-alert.ok{border-color:#9dbf3c;background:rgba(214,247,90,.06);color:#d6f75a}',
+        '.jev-alert-title{font-weight:800;letter-spacing:.12em;margin-bottom:3px}',
+        '.jev-stream{max-height:132px;overflow:auto;border:1px solid rgba(214,247,90,.2);margin-bottom:10px}',
+        '.jev-stream-row{display:flex;gap:8px;padding:3px 8px;border-bottom:1px dashed rgba(214,247,90,.12);font-size:11px;white-space:nowrap}',
+        '.jev-stream-row b{color:#d6f75a;font-weight:700}.jev-stream-row .amber{color:#ffb000}',
+        '.jev-foot{border-top:1px solid rgba(214,247,90,.28);padding-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:space-between}',
+        '.jev-metric{padding:2px 6px;border:1px solid rgba(214,247,90,.28);color:#d6f75a;font-size:10.5px}',
+        '.jev-btn{padding:4px 10px;border:1px solid #9dbf3c;background:#d6f75a;color:#0b0e0b;font:800 10px/1 ui-monospace,Consolas,monospace;letter-spacing:.1em;cursor:pointer}',
+        '.jev-btn.ghost{background:transparent;color:#d6f75a}',
+        '.jev-foot-note{width:100%;color:#7f906f;font-size:10px;letter-spacing:.06em}',
+        '.jev-foot-note em{color:#ffb000;font-style:normal}',
       ].join('\n')
       const tag = document.createElement('style')
       tag.setAttribute('data-plugin', '@local/dsh-jevharness-preset')
@@ -88,19 +65,8 @@ window.__ModuleLoader__.load({
       document.head.appendChild(tag)
     }
 
-    // ---- display mode ----
-    const modeListeners = new Set()
-    let mode = readMode()
-    function readMode() { try { const v = window.localStorage.getItem(MODE_KEY); return (v === 'live' || v === 'compact' || v === 'showcase') ? v : 'live' } catch (e) { return 'live' } }
-    function getMode() { return mode }
-    function setMode(m) { mode = m; try { window.localStorage.setItem(MODE_KEY, m) } catch (e) { /* ignore */ } for (const fn of modeListeners) { try { fn() } catch (e) { /* ignore */ } } }
-    function useMode() { const [, f] = React.useState(0); React.useEffect(() => { const fn = () => f((x) => x + 1); modeListeners.add(fn); return () => { modeListeners.delete(fn) } }, []); return getMode() }
-    function cycleMode() { setMode(MODES[(MODES.indexOf(getMode()) + 1) % MODES.length]) }
-
-    // ---- latest-state store for HUD / pill ----
+    // ---- settled state: receipt snapshot after the turn goes idle ----
     const hud = { latest: null, listeners: new Set() }
-    // Settled state drives the governance receipt. A 4s idle debounce guarantees
-    // the receipt appears after the turn stops even if host turn/end is missing.
     const settled = { mode: false, snap: null, listeners: new Set() }
     let idleTimer = null
     function settleNow(s) {
@@ -119,10 +85,6 @@ window.__ModuleLoader__.load({
     function useHud() { const [, f] = React.useState(0); React.useEffect(() => { const fn = () => f((x) => x + 1); hud.listeners.add(fn); return () => { hud.listeners.delete(fn) } }, []); return hud.latest }
 
     // ---- JeV event kinds ----
-    // Durable JeV events are persisted as host plugin records
-    // ('plugin:jev-harness/decision' | '.../gate' | '.../receipt', ignorable:true)
-    // so a reopened session never rejects the log. Legacy logs used bare
-    // 'jev/decision' etc.; recognize both so old and new logs render identically.
     const JEV_PLUGIN_PREFIX = 'plugin:jev-harness/'
     function jevKindOf(type) {
       if (typeof type !== 'string') return null
@@ -133,11 +95,6 @@ window.__ModuleLoader__.load({
     }
 
     // ---- cross-turn ledger, STRICTLY per session ----
-    // The card must never mix sessions nor count the same event twice: the host
-    // re-delivers/replays conversation events when it rebuilds a view, so a bare
-    // append-only accumulator double-counts an earlier turn as soon as a new
-    // turn arrives. Each session gets its own turn ledger, its own high-water
-    // turn, and a seen-event set keyed by (sessionId, seq, type).
     const ledgerBySession = new Map()
     const maxTurnBySession = new Map()
     const seenBySession = new Map()
@@ -175,10 +132,8 @@ window.__ModuleLoader__.load({
     function recordJevEvent(ev) {
       try {
         const d = (ev && ev.data) || {}
-        const sid = typeof d.sessionId === 'string' && d.sessionId ? d.sessionId : (activeSessionId || '\u2205')
+        const sid = typeof d.sessionId === 'string' && d.sessionId ? d.sessionId : (activeSessionId || '∅')
         ensureSession(sid)
-        // Dedupe by event identity so replayed/re-rendered events never inflate a
-        // turn's counters; make the target session's ledger active for this row.
         if (turnLedger !== ledgerBySession.get(sid)) {
           turnLedger = ledgerBySession.get(sid)
           seenJev = seenBySession.get(sid)
@@ -226,8 +181,7 @@ window.__ModuleLoader__.load({
       return s ? Object.assign({}, s, { turns: turnRows(), totals: ledgerTotals() }) : s
     }
 
-    // ---- session-scoped UI gating ----
-    // The four native slots are explicit only in a started JEVHarness session.
+    // ---- session-scoped gating: the single HUD slot ----
     function sessionIdOf(props) {
       const p = props || {}
       if (typeof p.sessionId === 'string' && p.sessionId) return p.sessionId
@@ -251,7 +205,7 @@ window.__ModuleLoader__.load({
           const snap = scoped && scoped.session && typeof scoped.session.getSnapshot === 'function' ? scoped.session.getSnapshot() : null
           if (snap && snap.blank === true) return true
         }
-      } catch (e) { /* fail-open: unknown session state is not treated as blank */ }
+      } catch (e) { /* fail-open */ }
       return false
     }
     function hasJevState() {
@@ -260,17 +214,17 @@ window.__ModuleLoader__.load({
     }
     function jevVisible(props) {
       const id = sessionIdOf(props)
-      if (!id) return !!activeSessionId && hasJevState()
+      if (!id) return true
       if (blankSession(id)) return false
       if (activeSessionId && activeSessionId !== id) return false
-      return hasJevState()
+      return true
     }
     function noteSession(ev) {
       const sid = ev && ev.data && ev.data.sessionId
       const switched = typeof sid === 'string' && sid !== activeSessionId
       if (switched) {
         activeSessionId = sid
-        activateSession(sid)   // point at THIS session's ledger; never clear others
+        activateSession(sid)
         hud.latest = null
         settled.snap = null
         settled.mode = false
@@ -285,18 +239,18 @@ window.__ModuleLoader__.load({
     // ---- state fold ----
     function initState(ev) {
       const turn = ev.data && typeof ev.data.turn === 'number' ? ev.data.turn : 0
-      return { turn: turn, decisions: jevKindOf(ev.type) === 'decision' ? [ev.data] : [], gates: jevKindOf(ev.type) === 'gate' ? [ev.data] : [], chunkLadder: (ev.data && ev.data.chunkLadder) || [], ruleHits: (ev.data && ev.data.ruleHits) || [] }
+      return { turn: turn, decisions: jevKindOf(ev.type) === 'decision' ? [ev.data] : [], gates: jevKindOf(ev.type) === 'gate' ? [ev.data] : [] }
     }
     function foldState(state, ev) {
-      const s = state || { turn: 0, decisions: [], gates: [], chunkLadder: [], ruleHits: [] }
+      const s = state || { turn: 0, decisions: [], gates: [] }
       const turn = ev.data && typeof ev.data.turn === 'number' ? ev.data.turn : s.turn
       if (jevKindOf(ev.type) === 'decision') {
         const step = ev.data && ev.data.step
         const keyOf = function (d) { return (d && typeof d.turn === 'number' ? d.turn : 'x') + ':' + (d && d.step) }
         const decisions = s.decisions.filter(function (d) { return step === undefined || keyOf(d) !== keyOf(ev.data) }).concat([ev.data])
-        return { turn: turn, decisions: decisions, gates: s.gates, chunkLadder: ev.data.chunkLadder || s.chunkLadder, ruleHits: ev.data.ruleHits || s.ruleHits }
+        return { turn: turn, decisions: decisions, gates: s.gates }
       }
-      return { turn: turn, decisions: s.decisions, gates: s.gates.concat([ev.data]), chunkLadder: s.chunkLadder, ruleHits: s.ruleHits }
+      return { turn: turn, decisions: s.decisions, gates: s.gates.concat([ev.data]) }
     }
 
     const definition = {
@@ -312,14 +266,11 @@ window.__ModuleLoader__.load({
       start: function (_context, match) { noteSession(match.event); recordJevEvent(match.event); const s = initState(match.event); hudSet(s); return s },
       update: function (context, match) { const reset = noteSession(match.event); recordJevEvent(match.event); const s = reset ? initState(match.event) : foldState(context && context.state, match.event); hudSet(s); return s },
       publication: function () { return 'immediate' },
-      // Live state is projected into conversation.input.dock at the bottom of
-      // the conversation. The Definition still folds events, but must not anchor
-      // a card at the first decision (top), where it scrolls out of view.
+      // State only. No inline card; the header HUD is the sole visible anchor.
       buildViewNode: function () { return null },
     }
 
-    // Turn-end governance receipt: a separate Definition anchored on turn/end,
-    // so the card lands at the bottom of the conversation after the turn closes.
+    // Turn-end definition still snapshots the receipt into the settled store.
     const RECEIPT_KIND = KIND + '-receipt'
     const receiptDefinition = {
       kind: RECEIPT_KIND,
@@ -344,13 +295,7 @@ window.__ModuleLoader__.load({
         return s
       },
       publication: function () { return 'immediate' },
-      buildViewNode: function (context) {
-        if (!context || context.state === undefined) return null
-        const m = (context.start && context.start.match) || context.start || (context.matches && context.matches[0]) || null
-        const anchor = (m && m.event && m.event.seq) || 0
-        const loc = (m && m.location) || { kind: 'unresolved' }
-        return { key: context.key, kind: RECEIPT_KIND, id: context.id, target: 'chat', anchorSeq: anchor, location: loc, visibility: 'visible', data: context.state }
-      },
+      buildViewNode: function () { return null },
     }
 
     function fmtTok(n) {
@@ -361,301 +306,243 @@ window.__ModuleLoader__.load({
       if (a >= 1e3) return (v / 1e3).toFixed(1) + 'k'
       return String(v)
     }
-    function JevCard(props) {
-      React.useEffect(() => { ensureStyles() }, [])
-      const s = props.state || { turn: 0, decisions: [], gates: [] }
-      const m = props.mode || 'live'
-      const decs = s.decisions || []
-      const gates = s.gates || []
-      const last = decs.length ? decs[decs.length - 1] : null
-      const denyGates = gates.filter((g) => g.verdict === 'deny')
-      const rounds = s.turns || turnRows()
-      const tot = s.totals || ledgerTotals()
-      const savedT = tot.savedTokens
-      const reuseRate = tot.decisions ? Math.round((tot.cacheReuse / tot.decisions) * 100) : 0
-      const lat = last && typeof last.latencyMs === 'number' ? Math.round(last.latencyMs) : null
-      const head = h('div', { className: 'jev-card-head' },
-        h('span', { className: 'jev-card-title' }, props && props.receipt ? 'JEV 治理回执' : 'JEV 实时介入'),
-        h('span', { className: 'jev-dot' }),
-        h('span', { className: 'jev-card-sub' }, '· 全会话 ' + tot.rounds + ' 轮 · ' + tot.decisions + ' 步决策' + (tot.gates ? ' · ' + tot.gates + ' 次拦截' : '') + (lat !== null ? ' · ' + lat + 'ms' : '')),
-        denyGates.length ? h('span', { className: 'jev-tag jev-tag-deny' }, '拦截') : null)
-      const shield = denyGates.length ? h('div', { className: 'jev-shield' },
-        h('span', { className: 'jev-shield-ic' }, '🛡'),
-        h('span', null, 'JEVHarness 已拦截 ' + denyGates.length + ' 次：' + (denyGates[0].ruleId || 'policy')),
-        denyGates[0].reason ? h('span', { className: 'jev-card-sub' }, '— ' + String(denyGates[0].reason).slice(0, 90)) : null) : null
-      // All-turn rollup: one compact row per turn, then totals and savings rate.
-      // This survives past turns; the step-flow below shows the live turn's detail.
-      const turnBlock = h('div', { className: 'jev-turns' }, rounds.length ? rounds.map((r) =>
-        h('div', { key: 'turn-' + r.turn, className: 'jev-turn-row' },
-          h('span', { className: 'jev-turn-label' }, '第 ' + r.turn + ' 轮'),
-          h('span', null, '决策 '), h('b', null, String(r.decisions)),
-          h('span', null, '· 拦截 '), h('b', null, String(r.gates)),
-          h('span', null, '· 省 '), h('b', null, fmtTok(r.savedTokens)),
-          h('span', { className: 'jev-rate' }, r.rate + '%'))) : null)
-      const totalsRow = h('div', { className: 'jev-turn-row' },
-        h('span', { className: 'jev-turn-label' }, '合计'),
-        h('span', null, '决策 '), h('b', null, String(tot.decisions)),
-        h('span', null, '· 拦截 '), h('b', null, String(tot.gates)),
-        h('span', null, '· 省 '), h('b', null, fmtTok(tot.savedTokens)),
-        h('span', { className: 'jev-rate' }, '省 ' + tot.rate + '%'))
-      // Full step-flow projection: every decision and every gate, ordered.
-      // The card keeps its 220px cap, so a long stream scrolls inside the card.
-      const rows = turnBlock ? [turnBlock, totalsRow] : []
-      for (const d of decs) {
-        const L = d.lines || {}
-        rows.push(h('div', { key: 'd' + (d.step || 0) + '-' + rows.length, className: 'jev-row' },
-          h('span', { className: 'jev-tag jev-tag-ok' }, '#' + d.step),
-          h('span', null, 'vis='), h('b', null, L.context_visibility || '?'),
-          h('span', null, '· cache='), h('b', null, L.cache || '?'),
-          h('span', null, '· route='), h('b', null, L.routing || '?'),
-          h('span', null, '· tools='), h('b', null, L.tools || '?'),
-          d.cacheFrozen ? h('span', { className: 'jev-tag jev-tag-ok' }, 'KV复用') : null))
-      }
-      for (const g of gates) {
-        rows.push(h('div', { key: 'g' + (g.step || 0) + '-' + rows.length, className: 'jev-row' },
-          h('span', { className: 'jev-tag ' + (g.verdict === 'deny' ? 'jev-tag-deny' : 'jev-tag-ask') }, g.verdict),
-          h('b', null, g.toolName || 'tool'), h('span', null, '· ' + (g.ruleId || ''))))
-      }
-      const metrics = h('div', { className: 'jev-kv' },
-        h('span', { className: 'jev-metric' }, '全会话 ' + tot.rounds + ' 轮 · KV 复用 ' + reuseRate + '%'),
-        h('span', { className: 'jev-metric' }, '省约 ' + fmtTok(savedT) + ' tokens · ' + tot.rate + '%'),
-        h('span', { className: 'jev-metric' }, '决策 ' + tot.decisions + ' · 拦截 ' + tot.gates))
-      const brand = m === 'showcase' ? h('div', { className: 'jev-brand' }, '⚡ Powered by JEVHarness · ' + tot.rounds + ' 轮 / ' + tot.decisions + ' 步决策 / ' + tot.gates + ' 次拦截 / 省约 ' + fmtTok(savedT) + ' tokens (' + tot.rate + '%)') : null
-      return h('div', { className: 'jev-card' }, head,
-        h('div', { className: 'jev-card-body' }, shield, rows), metrics, brand)
+
+    function JevGauge(props) {
+      const reuse = Math.max(0, Math.min(100, props.reuse || 0))
+      const r = 44
+      const c = 2 * Math.PI * r
+      const dash = (reuse / 100) * c
+      return h('div', { className: 'jev-gauge-box' },
+        h('svg', { viewBox: '0 0 120 120', width: 124, height: 124, role: 'img', 'aria-label': 'KV 复用率仪表' },
+          h('circle', { cx: 60, cy: 60, r: r + 8, fill: 'none', stroke: 'rgba(214,247,90,.14)', strokeWidth: 1, strokeDasharray: '2 4' }),
+          h('circle', { cx: 60, cy: 60, r: r, fill: 'none', stroke: 'rgba(214,247,90,.18)', strokeWidth: 8 }),
+          h('circle', { cx: 60, cy: 60, r: r, fill: 'none', stroke: '#d6f75a', strokeWidth: 8, strokeDasharray: dash + ' ' + c, transform: 'rotate(-90 60 60)' }),
+          h('g', { transform: 'rotate(' + (-120 + reuse * 2.4) + ' 60 60)' },
+            h('line', { x1: 60, y1: 60, x2: 60, y2: 20, stroke: '#ffb000', strokeWidth: 2 }),
+            h('circle', { cx: 60, cy: 60, r: 4, fill: '#ffb000' })),
+          h('text', { x: 60, y: 66, textAnchor: 'middle', fill: '#d6f75a', fontSize: 18, fontWeight: 800 }, reuse + '%'),
+          h('text', { x: 60, y: 82, textAnchor: 'middle', fill: '#7f906f', fontSize: 9 }, 'KV REUSE')))
     }
 
-    function JevReceiptView(props) {
-      const s = (props && props.node && props.node.data) || null
-      if (!jevVisible(props)) return null
-      return h('div', { className: 'jev-receipt-wrap' }, h(JevCard, { state: s, mode: getMode(), receipt: true }))
+    function JevChart(props) {
+      const rows = props.rows || []
+      const w = 260
+      const hg = 78
+      const vals = rows.length ? rows.map((r) => r.rate) : [0]
+      const max = Math.max.apply(null, [10].concat(vals))
+      const xOf = function (i) { return vals.length === 1 ? w : (i / (vals.length - 1)) * w }
+      const yOf = function (v) { return hg - (v / max) * (hg - 12) }
+      const pts = vals.map((v, i) => xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1)).join(' ')
+      const area = '0,' + hg + ' ' + pts + ' ' + w + ',' + hg
+      return h('div', { className: 'jev-chart-box' },
+        h('div', { className: 'jev-box-label' }, 'SAVINGS / TURN'),
+        h('svg', { viewBox: '0 0 ' + w + ' ' + hg, width: '100%', height: 74, preserveAspectRatio: 'none', role: 'img', 'aria-label': '每轮节省比例曲线' },
+          h('line', { x1: 0, y1: hg - 8, x2: w, y2: hg - 8, stroke: 'rgba(214,247,90,.2)', strokeWidth: 1 }),
+          h('polygon', { points: area, fill: 'rgba(214,247,90,.12)' }),
+          h('polyline', { points: pts, fill: 'none', stroke: '#d6f75a', strokeWidth: 2 }),
+          rows.map((r, i) => h('circle', { key: 'c' + i, cx: xOf(i), cy: yOf(r.rate), r: 2.5, fill: '#ffb000' }))))
+    }
+
+    function JevReceiptPopover(props) {
+      React.useEffect(() => { ensureStyles() }, [])
+      const s = props.state || {}
+      const rounds = s.turns || turnRows()
+      const tot = s.totals || ledgerTotals()
+      const decs = s.decisions || []
+      const gates = s.gates || []
+      const denies = gates.filter((g) => g.verdict === 'deny')
+      const last = decs.length ? decs[decs.length - 1] : null
+      const lat = last && typeof last.latencyMs === 'number' ? Math.round(last.latencyMs) : null
+      const reuse = tot.decisions ? Math.round((tot.cacheReuse / tot.decisions) * 100) : 0
+      const step = last && typeof last.step === 'number' ? last.step : 0
+      const tiles = [
+        ['STEP / 决策', String(step || tot.decisions), ''],
+        ['HEALTH / 状态', denies.length ? 'DENY' : 'OK', denies.length ? 'red' : ''],
+        ['IMAGE / 版本', 'jev 2.3.3', ''],
+        ['REPL / 拦截', String(denies.length), denies.length ? 'amber' : ''],
+        ['BUDGET / 节省', tot.rate + '%', 'amber'],
+        ['TIMEOUT / 延迟', lat === null ? 'n/a' : lat + 'ms', ''],
+      ]
+      function receiptText() {
+        return 'JEV 治理回执 · ' + tot.rounds + ' 轮 · 决策 ' + tot.decisions + ' · 拦截 ' + tot.gates +
+          ' · KV 复用 ' + reuse + '% · 省约 ' + fmtTok(tot.savedTokens) + ' tokens (' + tot.rate + '%)'
+      }
+      function copyReceipt() {
+        try {
+          if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') navigator.clipboard.writeText(receiptText())
+        } catch (e) { /* clipboard is best-effort */ }
+      }
+      return h('div', { id: 'jev-receipt-pop', className: 'jev-pop', style: { left: props.left, top: props.top }, role: 'dialog', 'aria-label': 'JEV 治理回执' },
+        h('div', { className: 'jev-pop-head' },
+          h('span', { className: 'jev-pop-title' }, 'JEV // RECEIPT'),
+          h('span', { className: 'jev-barcode' }),
+          h('span', { className: 'jev-live' }, 'LIVE'),
+          h('button', { type: 'button', className: 'jev-btn ghost', onClick: props.onClose, 'aria-label': '关闭回执' }, '×')),
+        h('div', { className: 'jev-pop-body' },
+          h('div', { className: 'jev-tiles' }, tiles.map((t) => h('div', { className: 'jev-tile', key: t[0] },
+            h('span', { className: 'jev-tile-label' }, t[0]),
+            h('span', { className: 'jev-tile-value' + (t[2] ? ' ' + t[2] : '') }, t[1])))),
+          h('div', { className: 'jev-instrument' },
+            h(JevGauge, { reuse: reuse }),
+            h(JevChart, { rows: rounds })),
+          denies.length
+            ? h('div', { className: 'jev-alert' },
+                h('div', { className: 'jev-alert-title' }, 'POLICY · DENIED'),
+                h('div', null, denies.length + ' 次拦截 · 规则 ' + (denies[0].ruleId || 'policy')),
+                denies[0].reason ? h('div', null, String(denies[0].reason).slice(0, 120)) : null)
+            : h('div', { className: 'jev-alert ok' },
+                h('div', { className: 'jev-alert-title' }, 'ALL CLEAR · 无拦截'),
+                h('div', null, '本会话没有策略拦截')),
+          h('div', { className: 'jev-stream' }, rounds.length
+            ? rounds.map((r) => h('div', { className: 'jev-stream-row', key: 'row' + r.turn },
+                h('span', null, 'T+' + String(r.turn).padStart(2, '0')),
+                h('b', null, '决策 ' + r.decisions),
+                h('span', { className: 'amber' }, '拦截 ' + r.gates),
+                h('span', null, '省 ' + fmtTok(r.savedTokens)),
+                h('span', null, r.rate + '%')))
+            : h('div', { className: 'jev-stream-row' }, '等待会话事件…')),
+          h('div', { className: 'jev-foot' },
+            h('div', null,
+              h('span', { className: 'jev-metric' }, 'KV 复用 ' + reuse + '%'),
+              h('span', { className: 'jev-metric' }, '省约 ' + fmtTok(tot.savedTokens) + ' tokens · ' + tot.rate + '%'),
+              h('span', { className: 'jev-metric' }, '决策 ' + tot.decisions + ' · 拦截 ' + tot.gates)),
+            h('div', null,
+              h('button', { type: 'button', className: 'jev-btn ghost', onClick: copyReceipt }, '复制回执'),
+              h('button', { type: 'button', className: 'jev-btn', onClick: props.onClose }, '关闭')),
+            h('div', { className: 'jev-foot-note' }, 'HOLD ' + reuse + '% · 全会话 ' + tot.rounds + ' 轮 · 省约 ' + fmtTok(tot.savedTokens) + ' tokens (' + tot.rate + '%) THEN → ', h('em', null, 'JEV HARNESS AUTO')))))
+    }
+
+    // Floating receipt is mounted on document.body, not inside the header.
+    // Header utilities may clip or transform fixed children; body mounting cannot.
+    function escHtml(v) {
+      return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+    }
+    function receiptMarkup(s) {
+      const rounds = (s && s.turns) || turnRows()
+      const tot = (s && s.totals) || ledgerTotals()
+      const decs = (s && s.decisions) || []
+      const gates = (s && s.gates) || []
+      const denies = gates.filter(function (g) { return g.verdict === "deny" })
+      const last = decs.length ? decs[decs.length - 1] : null
+      const lat = last && typeof last.latencyMs === "number" ? Math.round(last.latencyMs) : null
+      const reuse = tot.decisions ? Math.round((tot.cacheReuse / tot.decisions) * 100) : 0
+      const dash = ((reuse / 100) * 2 * Math.PI * 44).toFixed(1)
+      const vals = rounds.length ? rounds.map(function (r) { return r.rate }) : [0]
+      const max = Math.max.apply(null, [10].concat(vals))
+      const xOf = function (i) { return vals.length === 1 ? 260 : (i / (vals.length - 1)) * 260 }
+      const yOf = function (v) { return 78 - (v / max) * 66 }
+      const pts = vals.map(function (v, i) { return xOf(i).toFixed(1) + "," + yOf(v).toFixed(1) }).join(" ")
+      const summary = "JEV 治理回执 · " + tot.rounds + " 轮 · 决策 " + tot.decisions + " · 拦截 " + tot.gates + " · KV 复用 " + reuse + "% · 省约 " + fmtTok(tot.savedTokens) + " tokens (" + tot.rate + "%)"
+      const tiles = [
+        ["STEP / 决策", String((last && last.step) || tot.decisions), ""],
+        ["HEALTH / 状态", denies.length ? "DENY" : "OK", denies.length ? "red" : ""],
+        ["IMAGE / 版本", "jev 2.3.5", ""],
+        ["REPL / 拦截", String(denies.length), denies.length ? "amber" : ""],
+        ["BUDGET / 节省", tot.rate + "%", "amber"],
+        ["TIMEOUT / 延迟", lat === null ? "n/a" : lat + "ms", ""],
+      ]
+      let html = ""
+      html += "<div class=\"jev-pop-head\"><span class=\"jev-pop-title\">JEV // RECEIPT</span><span class=\"jev-barcode\"></span><span class=\"jev-live\">LIVE</span><button type=\"button\" class=\"jev-btn ghost\" data-jev-close=\"1\">×</button></div>"
+      html += "<div class=\"jev-pop-body\">"
+      html += "<div class=\"jev-tiles\">" + tiles.map(function (t) { return "<div class=\"jev-tile\"><span class=\"jev-tile-label\">" + escHtml(t[0]) + "</span><span class=\"jev-tile-value " + t[2] + "\">" + escHtml(t[1]) + "</span></div>" }).join("") + "</div>"
+      html += "<div class=\"jev-instrument\"><div class=\"jev-gauge-box\"><svg viewBox=\"0 0 120 120\" width=\"124\" height=\"124\"><circle cx=\"60\" cy=\"60\" r=\"52\" fill=\"none\" stroke=\"rgba(214,247,90,.14)\" stroke-width=\"1\" stroke-dasharray=\"2 4\"/><circle cx=\"60\" cy=\"60\" r=\"44\" fill=\"none\" stroke=\"rgba(214,247,90,.18)\" stroke-width=\"8\"/><circle cx=\"60\" cy=\"60\" r=\"44\" fill=\"none\" stroke=\"#d6f75a\" stroke-width=\"8\" stroke-dasharray=\"" + dash + " 276.5\" transform=\"rotate(-90 60 60)\"/><text x=\"60\" y=\"66\" text-anchor=\"middle\" fill=\"#d6f75a\" font-size=\"18\" font-weight=\"800\">" + reuse + "%</text><text x=\"60\" y=\"82\" text-anchor=\"middle\" fill=\"#7f906f\" font-size=\"9\">KV REUSE</text></svg></div>"
+      html += "<div class=\"jev-chart-box\"><div class=\"jev-box-label\">SAVINGS / TURN</div><svg viewBox=\"0 0 260 78\" width=\"100%\" height=\"74\" preserveAspectRatio=\"none\"><polygon points=\"0,78 " + pts + " 260,78\" fill=\"rgba(214,247,90,.12)\"/><polyline points=\"" + pts + "\" fill=\"none\" stroke=\"#d6f75a\" stroke-width=\"2\"/>" + rounds.map(function (r, i) { return "<circle cx=\"" + xOf(i).toFixed(1) + "\" cy=\"" + yOf(r.rate).toFixed(1) + "\" r=\"2.5\" fill=\"#ffb000\"/>" }).join("") + "</svg></div></div>"
+      html += denies.length
+        ? "<div class=\"jev-alert\"><div class=\"jev-alert-title\">POLICY · DENIED</div><div>" + denies.length + " 次拦截 · 规则 " + escHtml(denies[0].ruleId || "policy") + "</div>" + (denies[0].reason ? "<div>" + escHtml(String(denies[0].reason).slice(0, 120)) + "</div>" : "") + "</div>"
+        : "<div class=\"jev-alert ok\"><div class=\"jev-alert-title\">ALL CLEAR · 无拦截</div><div>本会话没有策略拦截</div></div>"
+      html += "<div class=\"jev-stream\">" + (rounds.length ? rounds.map(function (r) { return "<div class=\"jev-stream-row\"><span>T+" + String(r.turn).padStart(2, "0") + "</span><b>决策 " + r.decisions + "</b><span class=\"amber\">拦截 " + r.gates + "</span><span>省 " + fmtTok(r.savedTokens) + "</span><span>" + r.rate + "%</span></div>" }).join("") : "<div class=\"jev-stream-row\">等待会话事件…</div>") + "</div>"
+      html += "<div class=\"jev-foot\"><div><span class=\"jev-metric\">KV 复用 " + reuse + "%</span><span class=\"jev-metric\">省约 " + fmtTok(tot.savedTokens) + " tokens · " + tot.rate + "%</span><span class=\"jev-metric\">决策 " + tot.decisions + " · 拦截 " + tot.gates + "</span></div><div><button type=\"button\" class=\"jev-btn ghost\" data-jev-copy=\"1\">复制回执</button> <button type=\"button\" class=\"jev-btn\" data-jev-close=\"1\">关闭</button></div><div class=\"jev-foot-note\">HOLD " + reuse + "% · 全会话 " + tot.rounds + " 轮 · 省约 " + fmtTok(tot.savedTokens) + " tokens (" + tot.rate + "%) THEN → <em>JEV HARNESS AUTO</em></div></div>"
+      html += "</div>"
+      return { html: html, copy: summary }
+    }
+    function unmountReceipt() {
+      if (typeof document === "undefined") return
+      const old = document.getElementById("jev-receipt-pop")
+      if (old && old.parentNode) old.parentNode.removeChild(old)
+      try { window.__JEV_POPUP_OPEN__ = false } catch (e) { /* ignore */ }
+    }
+    function mountReceipt(s, left, top, onClose) {
+      unmountReceipt()
+      if (typeof document === "undefined" || !document.body) return
+      ensureStyles()
+      const data = receiptMarkup(s)
+      const box = document.createElement("div")
+      box.id = "jev-receipt-pop"
+      box.className = "jev-pop"
+      box.setAttribute("role", "dialog")
+      box.setAttribute("aria-label", "JEV 治理回执")
+      box.setAttribute("data-copy", data.copy)
+      box.style.left = Math.round(left) + "px"
+      box.style.top = Math.round(top) + "px"
+      box.innerHTML = data.html
+      const closes = box.querySelectorAll("[data-jev-close]")
+      for (let i = 0; i < closes.length; i++) closes[i].addEventListener("click", function (ev) { ev.stopPropagation(); onClose() })
+      const copy = box.querySelector("[data-jev-copy]")
+      if (copy) copy.addEventListener("click", function (ev) {
+        ev.stopPropagation()
+        try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(box.getAttribute("data-copy") || "") } catch (e) { /* ignore */ }
+      })
+      document.body.appendChild(box)
+      try { window.__JEV_POPUP_OPEN__ = true } catch (e) { /* ignore */ }
     }
     function JevHud(props) {
       React.useEffect(() => { ensureStyles() }, [])
+      const [open, setOpen] = React.useState(false)
+      const [anchor, setAnchor] = React.useState({ left: 24, top: 44 })
+      const btnRef = React.useRef(null)
       const s = useHud()
-      useMode()
+      const st = useSettled()
+      React.useEffect(() => {
+        if (!open) { unmountReceipt(); return undefined }
+        mountReceipt(st.mode && st.snap ? st.snap : s, anchor.left, anchor.top, function () { setOpen(false) })
+        function outside(e) {
+          const t = e.target
+          if (btnRef.current && btnRef.current.contains(t)) return
+          const pop = typeof document !== 'undefined' ? document.getElementById('jev-receipt-pop') : null
+          if (pop && pop.contains(t)) return
+          setOpen(false)
+        }
+        function esc(e) { if (e.key === 'Escape') { setOpen(false); unmountReceipt() } }
+        if (typeof document !== 'undefined') {
+          document.addEventListener('mousedown', outside)
+          document.addEventListener('keydown', esc)
+        }
+        return function () {
+          if (typeof document !== 'undefined') {
+            document.removeEventListener('mousedown', outside)
+            document.removeEventListener('keydown', esc)
+          }
+        }
+      }, [open, s, st, anchor])
       if (!jevVisible(props)) return null
-      if (!s || (!s.decisions.length && !s.gates.length)) return null
-      const last = s.decisions.length ? s.decisions[s.decisions.length - 1] : null
+      const last = s && s.decisions && s.decisions.length ? s.decisions[s.decisions.length - 1] : null
       const step = last && typeof last.step === 'number' ? last.step : null
       const lat = last && typeof last.latencyMs === 'number' ? Math.round(last.latencyMs) : null
-      const denies = s.gates.filter((g) => g.verdict === 'deny').length
-      return h('span', { className: 'jev-hud', title: '点击打开 JEV 深度决策台（右侧栏）', onClick: openDeepPanel },
-        h('span', { className: 'jev-dot' }), h('span', null, 'JEV Live'),
-        step !== null ? h('span', { className: 'jev-sep' }, '·') : null,
-        step !== null ? h('span', null, 'Step #' + step) : null,
-        lat !== null ? h('span', { className: 'jev-sep' }, '·') : null,
-        lat !== null ? h('span', null, lat + 'ms') : null,
-        denies > 0 ? h('span', { className: 'jev-badge-deny' }, ' ⛊ ' + denies) : null)
-    }
-    function JevPill(props) {
-      React.useEffect(() => { ensureStyles() }, [])
-      const s = useHud()
-      const m = useMode()
-      if (!jevVisible(props)) return null
-      if (!s || (!s.decisions.length && !s.gates.length)) return null
-      return h('button', { type: 'button', className: 'jev-pill', onClick: cycleMode }, h('span', { className: 'jev-dot' }), 'JEV 六维 · ' + MODE_LABEL[m])
-    }
-
-    // HUD opens the dedicated right-sidebar decision console; the input pill
-    // keeps cycling the display mode (live / compact / showcase).
-    function openDeepPanel() {
-      try {
-        if (clientCtx && clientCtx.sidebarRight && typeof clientCtx.sidebarRight.openTab === 'function') {
-          clientCtx.sidebarRight.openTab(SIDEBAR_KIND)
-          return
+      const denies = s && s.gates ? s.gates.filter((g) => g.verdict === 'deny').length : 0
+      function toggle() {
+        if (!open && btnRef.current && typeof btnRef.current.getBoundingClientRect === 'function') {
+          const r = btnRef.current.getBoundingClientRect()
+          const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
+          const vh = typeof window !== 'undefined' ? window.innerHeight : 800
+          setAnchor({ left: Math.max(12, Math.min(r.left, vw - 432)), top: Math.min(r.bottom + 8, Math.max(12, vh - 140)) })
         }
-      } catch (e) { /* fall through to mode cycling */ }
-      cycleMode()
-    }
-
-    const LADDER = [
-      { key: 'hide', label: '隐藏', cls: 'hide', desc: '不送进模型，最省 token' },
-      { key: 'short_summary', label: '短摘要', cls: 'short', desc: '压到约 240 字，只留要点' },
-      { key: 'long_summary', label: '长摘要', cls: 'long', desc: '压到约 1200 字，保留细节' },
-      { key: 'full', label: '全文', cls: 'full', desc: '完整交给模型阅读' },
-    ]
-    // Six decisions, each with a plain-language explanation for non-experts.
-    const DIMENSIONS = [
-      { key: 'context_visibility', label: '上下文', desc: '每份资料给模型看多少' },
-      { key: 'cache', label: '缓存', desc: '能否复用上一步的 KV Cache' },
-      { key: 'routing', label: '路由', desc: '这一步交给哪档模型处理' },
-      { key: 'tools', label: '工具', desc: '给模型展示多少工具说明' },
-      { key: 'permissions', label: '权限', desc: '工具调用是否放行' },
-      { key: 'security', label: '安全', desc: '信息敏感级别与外发限制' },
-    ]
-    const VALUE_LABEL = {
-      hide: '隐藏', short_summary: '短摘要', long_summary: '长摘要', full: '全文',
-      reuse: '复用缓存', rebuild: '重建缓存', frontier: '前沿模型', cheap: '轻量模型',
-      background: '后台模型', targeted: '按需加载', full_read: '全部加载',
-      search_source: '检索加载', allow: '放行', ask: '需确认', deny: '拒绝',
-      public: '公开', internal: '内部', sensitive: '敏感', secret: '机密',
-    }
-    function valueLabel(v) { return VALUE_LABEL[v] || v || '未定' }
-    // Turn a rule's match reason into a concrete, human-readable example.
-    function ruleExample(r) {
-      const reason = String((r && r.reason) || '')
-      if (/always/i.test(reason)) return '例如：每一步都会自动加载这条规则'
-      const paths = reason.match(/paths:([^;]+)/)
-      if (paths) return '例如：读到 ' + paths[1].split(',')[0].trim() + ' 下的文件时加载'
-      const keywords = reason.match(/keywords:([^;]+)/)
-      if (keywords) return '例如：内容出现「' + keywords[1].split(',')[0].trim() + '」时加载'
-      const tools = reason.match(/tools:([^;]+)/)
-      if (tools) return '例如：调用 ' + tools[1].split(',')[0].trim() + ' 类工具时加载'
-      return '例如：本回合的活跃路径或内容触发了这条规则'
-    }
-    function JevDeepPanel(props) {
-      React.useEffect(() => { ensureStyles() }, [])
-      const useTabInfo = props && props.hooks && props.hooks.tabInfo
-      const info = useTabInfo ? useTabInfo() : null
-      const s = useHud() || { turn: 0, decisions: [], gates: [], chunkLadder: [], ruleHits: [] }
-      if (!jevVisible(props)) return null
-      const decs = s.decisions || []
-      const gates = s.gates || []
-      const chunks = s.chunkLadder || []
-      const rules = s.ruleHits || []
-      const last = decs.length ? decs[decs.length - 1] : null
-      const L = (last && last.lines) || {}
-      const denyGates = gates.filter((g) => g.verdict === 'deny')
-      const rounds = s.turns || turnRows()
-      const tot = s.totals || ledgerTotals()
-      const savedT = tot.savedTokens
-      const reuseRate = tot.decisions ? Math.round((tot.cacheReuse / tot.decisions) * 100) : 0
-      const counts = {}
-      for (const x of LADDER) counts[x.key] = 0
-      for (const c of chunks) { if (counts[c.visibility] !== undefined) counts[c.visibility] += 1 }
-      const total = chunks.length || 1
-      const fullscreen = info && info.sidebar && info.sidebar.fullscreen ? ' · 全屏' : ''
-
-      const head = h('div', { className: 'jev-card-head' },
-        h('span', { className: 'jev-card-title' }, 'JEV 深度决策台'),
-        h('span', { className: 'jev-dot' }),
-        h('span', { className: 'jev-card-sub' }, ' · 全会话 ' + tot.rounds + ' 轮 · ' + tot.decisions + ' 步治理决策' + (tot.gates ? ' · 拦截 ' + tot.gates + ' 次' : '') + ' · 省 ' + tot.rate + '%' + fullscreen),
-        denyGates.length ? h('span', { className: 'jev-tag jev-tag-deny' }, '拦截') : null)
-      const shield = denyGates.length ? h('div', { className: 'jev-shield' },
-        h('span', { className: 'jev-shield-ic' }, '🛡'),
-        h('span', null, 'JEVHarness 已拦截 ' + denyGates.length + ' 次：' + (denyGates[0].ruleId || 'policy')),
-        denyGates[0].reason ? h('span', { className: 'jev-card-sub' }, '— ' + String(denyGates[0].reason).slice(0, 90)) : null) : null
-
-      const dimRows = DIMENSIONS.map((d) => h('div', { key: d.key, className: 'jev-row' },
-        h('span', { className: 'jev-tag jev-tag-ok' }, d.label),
-        h('b', null, valueLabel(L[d.key])),
-        h('span', { className: 'jev-card-sub' }, '— ' + d.desc)))
-
-      // Real-time decision stream — every decision and gate of this turn,
-      // scrollable inside a capped region so the panel never grows unbounded.
-      const streamRows = []
-      for (const d of decs) {
-        const L = d.lines || {}
-        streamRows.push(h('div', { key: 'sd' + (d.step || 0) + '-' + streamRows.length, className: 'jev-row' },
-          h('span', { className: 'jev-tag jev-tag-ok' }, '#' + d.step),
-          h('b', null, L.context_visibility || '?'), h('span', null, '/'), h('b', null, L.cache || '?'),
-          h('span', null, '/'), h('b', null, L.routing || '?'), h('span', null, '/'), h('b', null, L.tools || '?'),
-          h('span', { className: 'jev-card-sub' }, '· ' + d.step + ' 步')))
+        setOpen(function (v) { if (v) unmountReceipt(); return !v })
       }
-      for (const g of gates) {
-        streamRows.push(h('div', { key: 'sg' + (g.step || 0) + '-' + streamRows.length, className: 'jev-row' },
-          h('span', { className: 'jev-tag ' + (g.verdict === 'deny' ? 'jev-tag-deny' : 'jev-tag-ask') }, g.verdict),
-          h('b', null, g.toolName || 'tool'), h('span', null, '· ' + (g.ruleId || ''))))
-      }
-      const streamSec = h('div', { className: 'jev-deep-sec' },
-        h('div', { className: 'jev-row' }, h('b', null, '实时决策数据流'),
-          h('span', { className: 'jev-card-sub' }, '— 本回合共 ' + decs.length + ' 步决策 · ' + gates.length + ' 次拦截')),
-        h('div', { className: 'jev-stream' }, streamRows.length ? streamRows : h('div', { className: 'jev-empty' }, '等待本回合的决策事件…')))
-
-      // All-turn governance summary: every turn's decisions, gates and saved
-      // tokens plus the cumulative total and the savings ratio.
-      const summarySec = h('div', { className: 'jev-deep-sec' },
-        h('div', { className: 'jev-row' }, h('b', null, '逐轮汇总'),
-          h('span', { className: 'jev-card-sub' }, '— 每轮决策 / 拦截 / 估算省 token 及节省比例')),
-        h('div', { className: 'jev-turns' }, rounds.length ? rounds.map((r) =>
-          h('div', { key: 'sum-' + r.turn, className: 'jev-turn-row' },
-            h('span', { className: 'jev-turn-label' }, '第 ' + r.turn + ' 轮'),
-            h('span', null, '决策 '), h('b', null, String(r.decisions)),
-            h('span', null, '· 拦截 '), h('b', null, String(r.gates)),
-            h('span', null, '· KV复用 '), h('b', null, String(r.cacheReuse)),
-            h('span', null, '· 省 '), h('b', null, fmtTok(r.savedTokens)),
-            h('span', { className: 'jev-rate' }, '省 ' + r.rate + '%'))) : h('div', { className: 'jev-empty' }, '等待会话事件…')),
-        h('div', { className: 'jev-turn-row' },
-          h('span', { className: 'jev-turn-label' }, '合计'),
-          h('span', null, tot.rounds + ' 轮 · 决策 '), h('b', null, String(tot.decisions)),
-          h('span', null, '· 拦截 '), h('b', null, String(tot.gates)),
-          h('span', null, '· 省 '), h('b', null, fmtTok(tot.savedTokens)),
-          h('span', { className: 'jev-rate' }, '省 ' + tot.rate + '%')))
-      const ladderSec = h('div', { className: 'jev-deep-sec' },
-        h('div', { className: 'jev-row' }, h('b', null, '上下文处理'),
-          h('span', { className: 'jev-card-sub' }, '— 共 ' + chunks.length + ' 份资料，按重要性决定给模型看多少')),
-        h('div', { className: 'jev-ladder' }, LADDER.map((x) => counts[x.key]
-          ? h('span', { key: x.key, className: 'jev-ladder-seg jev-lvl-' + x.cls, style: { flex: String(counts[x.key] / total) }, title: x.label + ' ' + counts[x.key] + ' 份' }, String(counts[x.key]))
-          : null)),
-        h('div', { className: 'jev-legend' }, LADDER.map((x) => h('span', { key: x.key, className: 'jev-legend-item' },
-          h('i', { className: 'jev-swatch jev-lvl-' + x.cls }), x.label + ' ' + counts[x.key] + ' 份 · ' + x.desc))))
-
-      const ruleSec = h('div', { className: 'jev-deep-sec' },
-        h('div', { className: 'jev-row' }, h('b', null, '命中规则 (' + rules.length + ')'),
-          h('span', { className: 'jev-card-sub' }, '— 本回合自动加载的项目规范')),
-        rules.length
-          ? h('div', { className: 'jev-rules' }, rules.map((r) => h('div', { key: r.id, className: 'jev-rule' },
-              h('b', null, r.name || r.id),
-              h('span', { className: 'jev-card-sub' }, r.source || ''),
-              h('div', { className: 'jev-rule-reason' }, '命中原因：' + (r.reason || '路径或关键词匹配')),
-              h('div', { className: 'jev-rule-example' }, ruleExample(r)))))
-          : h('div', { className: 'jev-empty' }, '本回合没有命中条件规则（路径或关键词未触发）'))
-
-      // Data flow — compact inline version of .tmp/answers/jev-data-flow.html.
-      // Same five stages, same JEV skin, orthogonal connectors, one focal arrow.
-      const flowNodes = [
-        ['采集', '会话事件', '#a9b4c0'],
-        ['决策', '六维 JeV', '#a78bfa'],
-        ['裁剪', '可见阶梯', '#a9b4c0'],
-        ['投影', '旁路事件', '#a9b4c0'],
-        ['呈现', '三处 UI', '#58a6ff'],
-      ]
-      const flowSec = h('div', { className: 'jev-flow' },
-        h('div', { className: 'jev-row' }, h('b', null, '数据流'), h('span', { className: 'jev-card-sub' }, '— 只走 UI 旁路，不进模型 prompt')),
-        h('svg', { viewBox: '0 0 600 96', xmlns: 'http://www.w3.org/2000/svg', role: 'img', 'aria-label': '从会话事件到决策台的五段数据流' },
-          h('defs', null, h('marker', { id: 'jevFlowArrow', markerWidth: 6, markerHeight: 6, refX: 5, refY: 3, orient: 'auto' },
-            h('polygon', { points: '0 0, 6 3, 0 6', fill: '#a9b4c0' }))),
-          flowNodes.map(function (n, i) {
-            const x = 8 + i * 118
-            return h('g', { key: 'f' + i },
-              i ? h('line', { x1: x - 12, y1: 48, x2: x - 2, y2: 48, stroke: '#a9b4c0', strokeWidth: 1, markerEnd: 'url(#jevFlowArrow)' }) : null,
-              h('rect', { x: x, y: 22, width: 100, height: 52, rx: 6, fill: '#171c23', stroke: n[2] }),
-              h('text', { x: x + 50, y: 42, textAnchor: 'middle', fontSize: 11, fontWeight: 600, fill: n[2] }, n[1]),
-              h('text', { x: x + 50, y: 60, textAnchor: 'middle', fontSize: 9, fill: '#a9b4c0' }, n[0]))
-          })))
-
-      const metrics = h('div', { className: 'jev-kv' },
-        h('span', { className: 'jev-metric' }, '全会话 ' + tot.rounds + ' 轮 · KV 复用 ' + reuseRate + '%'),
-        h('span', { className: 'jev-metric' }, '省约 ' + fmtTok(savedT) + ' tokens · ' + tot.rate + '%'),
-        h('span', { className: 'jev-metric' }, '决策 ' + tot.decisions + ' · 拦截 ' + tot.gates))
-      const brand = getMode() === 'showcase' ? h('div', { className: 'jev-brand' }, '⚡ Powered by JEVHarness · 全会话 ' + tot.rounds + ' 轮省约 ' + fmtTok(savedT) + ' tokens (' + tot.rate + '%)') : null
-
-      return h('div', { className: 'jev-card jev-deep-card' },
-        head, shield,
-        h('div', { className: 'jev-deep-title' }, '六步决策 · 逐项说明'), dimRows,
-        summarySec, streamSec, ladderSec, flowSec, ruleSec, metrics, brand)
-    }
-
-    // Bottom-of-conversation live projection. conversation.input.dock is a
-    // full-width list above the composer, so the card stays visible as the
-    // conversation grows; it never scrolls away at the top.
-    function JevLiveDock(props) {
-      React.useEffect(() => { ensureStyles() }, [])
-      const live = useHud()
-      const st = useSettled()
-      const m = useMode()
-      if (!jevVisible(props)) return null
-      const receiptMode = st.mode && st.snap && st.snap.decisions && st.snap.decisions.length > 0
-      const s = receiptMode ? st.snap : live
-      if (!s || (!s.decisions.length && !s.gates.length)) return null
-      // Full Phase 2 card in the bottom dock. Step-flow rows stay capped; once
-      // the turn settles it switches to the governance receipt in the same spot.
-      return h('div', { className: 'jev-dock jev-dock-sticky' }, h(JevCard, { state: s, mode: m, receipt: !!receiptMode }))
+      const snap = st.mode && st.snap ? st.snap : s
+      return h('span', { className: 'jev-hud-wrap' },
+        h('button', { type: 'button', ref: btnRef, className: 'jev-hud', onClick: toggle, title: '点击查看 JEV 治理回执 · v2.3.4', 'aria-expanded': open },
+          h('span', { className: 'jev-dot' }),
+          h('span', null, 'JEV v2.3.5'),
+          step !== null ? h('span', { className: 'jev-sep' }, '·') : null,
+          step !== null ? h('span', null, 'Step #' + step) : null,
+          lat !== null ? h('span', { className: 'jev-sep' }, '·') : null,
+          lat !== null ? h('span', null, lat + 'ms') : null,
+          denies > 0 ? h('span', { className: 'jev-badge-deny' }, ' ⛊ ' + denies) : null),
+        null) /* receipt mounted on document.body */
     }
 
     return {
-      inject: ['uiConversation', 'slots', 'sidebarRight', 'sidebarRightTabs'],
+      inject: ['uiConversation', 'slots'],
       apply(ctx) {
         clientCtx = ctx || null
         try { if (typeof window !== 'undefined') window.__JEV_CLIENT_LOADED__ = true } catch (e) { /* ignore */ }
@@ -663,44 +550,7 @@ window.__ModuleLoader__.load({
         log('apply, uiConversation=', !!(ctx && ctx.uiConversation), 'slots=', !!(ctx && ctx.slots))
         try { ctx.uiConversation.events.register(definition); log('node definition registered') } catch (e) { log('node definition FAILED', String(e && e.message ? e.message : e)) }
         try { ctx.uiConversation.events.register(receiptDefinition); log('receipt definition registered') } catch (e) { log('receipt definition FAILED', String(e && e.message ? e.message : e)) }
-        try { ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'jev-harness-live-dock', order: 30 }, JevLiveDock)); log('input.dock slot registered') } catch (e) { log('input.dock slot FAILED', String(e && e.message ? e.message : e)) }
-        try { ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: RECEIPT_KIND }, JevReceiptView)); log('chat.node receipt slot registered') } catch (e) { log('chat.node slot FAILED', String(e && e.message ? e.message : e)) }
         try { ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({ name: 'conversation.session.header.utilities', id: 'jev-harness-hud', order: 40 }, JevHud)); log('hud slot registered') } catch (e) { log('hud slot FAILED', String(e && e.message ? e.message : e)) }
-        try { ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'jev-harness-pill', order: 90 }, JevPill)); log('pill slot registered') } catch (e) { log('pill slot FAILED', String(e && e.message ? e.message : e)) }
-        // Phase 3: dedicated right-sidebar tab — chunk ladder + conditional rule hits.
-        // Two-stage registration follows the official sidebarRightTabs contract:
-        // a static type declaration plus a keyed slot body, both disposed with ctx.
-        try {
-          if (ctx.sidebarRightTabs && typeof ctx.sidebarRightTabs.register === 'function') {
-            const register = () => ctx.sidebarRightTabs.register({
-              id: SIDEBAR_ID,
-              kind: SIDEBAR_KIND,
-              keepMounted: true,
-              title: () => 'JEV 决策台',
-              guide: [{
-                id: 'jev-deep-decisions',
-                order: 20,
-                title: () => 'JEV 决策台',
-                description: () => 'Chunk 可见性阶梯 · 条件规则命中 · 六维决策',
-              }],
-            })
-            if (typeof ctx.effect === 'function') {
-              ctx.effect(() => {
-                const d = register()
-                return () => { try { if (typeof d === 'function') d(); else if (d && typeof d.dispose === 'function') d.dispose() } catch (e) { /* ignore */ } }
-              })
-            } else {
-              register()
-            }
-            log('sidebarRightTabs registered')
-          }
-        } catch (e) { log('sidebarRightTabs FAILED', String(e && e.message ? e.message : e)) }
-        try {
-          if (ctx.slots && typeof ctx.slots.inject === 'function') {
-            ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: SIDEBAR_ID }, JevDeepPanel))
-            log('sidebar.right.pane.tab slot registered')
-          }
-        } catch (e) { log('sidebar pane tab slot FAILED', String(e && e.message ? e.message : e)) }
       },
     }
   },
